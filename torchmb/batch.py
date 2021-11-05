@@ -1,6 +1,7 @@
 import copy
 import collections
-from typing import Type, Dict, Callable, Union, Iterable
+from typing import (
+    Type, Dict, OrderedDict, Callable, Union, Iterable, Iterator, Tuple)
 
 import torch
 from torch import nn, fx
@@ -43,12 +44,19 @@ class AbstractBatchModule(nn.Module):
                 s[k] = gv
         return states
 
-    def _batch_size(self, x: torch.Tensor):
+    def _batch_size(self, x: torch.Tensor) -> int:
         if x.size(0) % self.batch:
             raise ValueError(
                 'The size of tensor is not divisible by model batch size.')
         return x.size(0) // self.batch
 
+    def merge_batch(self, x: torch.Tensor) -> torch.Tensor:
+        return einops.rearrange(x, 'g b ... -> (b g) ...')
+
+    def split_batch(self, x: torch.Tensor) -> torch.Tensor:
+        x = einops.rearrange(
+            x, '(b g) ... -> g b ...', b=self._batch_size(x), g=self.batch)
+        return x
 
 
 class BatchModule(AbstractBatchModule):
@@ -89,16 +97,20 @@ class BatchModule(AbstractBatchModule):
         return module
 
     def load_state_dict(self, state_dict: StateDict, strict: bool = True):
-        self._module.load_state_dict(state_dict, strict=strict)
+        self._module.load_state_dict(OrderedDict(state_dict), strict=strict)
 
     def state_dict(self) -> StateDict:
         return self._module.state_dict()
 
+    def named_parameters(
+        self, prefix: str = '', recurse: bool = True
+    ) -> Iterator[Tuple[str, nn.Parameter]]:
+        return self._module.named_parameters(prefix=prefix, recurse=recurse)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = einops.rearrange(x, 'g b ... -> (b g) ...')
+        # x = self.merge_batch(x)
         x = self._module(x)
-        x = einops.rearrange(
-            x, '(b g) ... -> g b ...', b=self._batch_size(x), g=self.batch)
+        # x = self.split_batch(x)
         return x
 
 
@@ -147,7 +159,10 @@ class BatchConv2d(AbstractBatchModule):
         super().__init__(batch)
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.kernel_size = kernel_size
+        if isinstance(kernel_size, int):
+            self.kernel_size = (kernel_size, ) * 2
+        else:
+            self.kernel_size = kernel_size
         self.stride = stride
         self.padding = padding
         self.output_padding = (0, 0)
@@ -156,8 +171,7 @@ class BatchConv2d(AbstractBatchModule):
         self.bias = bias
         self.padding_mode = padding_mode
         self.weight = nn.Parameter(
-            torch.Tensor(
-            batch, out_channels, in_channels, *kernel_size),
+            torch.Tensor(batch, out_channels, in_channels, *self.kernel_size),
             requires_grad=True)
         self.bias = None
         if bias is not None:
@@ -180,16 +194,64 @@ class BatchConv2d(AbstractBatchModule):
         return torch.nn.Conv2d.extra_repr(self) + f', batch={self.batch}'
 
 
+class BatchBatchNorm2d(AbstractBatchModule):
+    def __init__(
+            self, num_features: int, eps: float = 1e-5, momentum: float = 0.1,
+            affine: bool = True, track_running_stats: bool = True,
+            batch: int = 1):
+        super().__init__(batch)
+        self.num_features = num_features
+        self.eps = eps
+        self.momentum = momentum
+        self.affine = affine
+        self.track_running_stats = track_running_stats
+        if self.affine:
+            self.weight = nn.Parameter(torch.ones(batch, num_features))
+            self.bias = nn.Parameter(torch.zeros(batch, num_features))
+        else:
+            self.register_parameter('weight', None)
+            self.register_parameter('bias', None)
+        if self.track_running_stats:
+            self.running_mean = nn.Parameter(
+                torch.zeros(batch, num_features), requires_grad=False)
+            self.running_var = nn.Parameter(
+                torch.ones(batch, num_features), requires_grad=False)
+            self.register_buffer(
+                'num_batches_tracked', torch.tensor(0, dtype=torch.long))
+        else:
+            self.register_parameter('running_mean', None)
+            self.register_parameter('running_var', None)
+            self.register_buffer("num_batches_tracked", None)
+
+    def forward(self, x):
+        batch_size = self._batch_size(x)
+        x = einops.rearrange(
+            x, '(b g) c h w -> b (g c) h w', b=batch_size, g=self.batch)
+        mean = self.running_mean.flatten()
+        var = self.running_var.flatten()
+        weight = self.weight.flatten()
+        bias = self.bias.flatten()
+        x = nn.functional.batch_norm(
+            x, mean, var, weight, bias, self.training, self.momentum, self.eps)
+        x = einops.rearrange(
+            x, 'b (g c) h w -> (b g) c h w', b=batch_size, g=self.batch)
+        return x
+
+
 BATCH_FUNCS: Dict[Type, Callable[[nn.Module, int], nn.Module]] = {
+    nn.Linear: (
+        lambda module, batch: BatchLinear(
+            module.in_features, module.out_features, module.bias, batch)),
     nn.Conv2d: (
         lambda module, batch: BatchConv2d(
             module.in_channels, module.out_channels,
             module.kernel_size, module.stride, module.padding,
             module.dilation, module.groups, module.bias,
             module.padding_mode, batch)),
-    nn.Linear: (
-        lambda module, batch: BatchLinear(
-            module.in_features, module.out_features, module.bias, batch)),
+    nn.BatchNorm2d: (
+        lambda module, batch: BatchBatchNorm2d(
+            module.num_features, module.eps, module.momentum, module.affine,
+            module.track_running_stats, batch)),
     # nn.ReLU: BatchElementWise,
     # nn.MaxPool2d: BatchElementWise,
 }
