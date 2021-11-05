@@ -22,10 +22,13 @@ class TestBase(unittest.TestCase):
         xs = xs.clone().detach().requires_grad_()
         xb = xs.clone().detach().requires_grad_()
         rs = torch.stack([m(x) for m, x in zip(self.modules, xs)])
-        ss = {m.state_dict() for m in self.modules}
+        ss = [m.state_dict() for m in self.modules]
         self.batch_module.load_state_dicts(ss)
         rb = self.batch_module.merge_batch(xb)
-        rb = self.batch_module(rb)
+        if isinstance(self.batch_module, BatchModule):
+            rb = self.batch_module(rb, merge=False, split=False)
+        else:
+            rb = self.batch_module(rb)
         rb = self.batch_module.split_batch(rb)
         return xs, xb, rs, rb
 
