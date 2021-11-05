@@ -1,7 +1,7 @@
 import copy
-import collections
 from typing import (
-    Type, Dict, OrderedDict, Callable, Union, Iterable, Iterator, Tuple)
+    Type, Dict, OrderedDict, Callable, Union,
+    Sequence, Iterator, Mapping, List, Tuple)
 
 import torch
 from torch import nn, fx
@@ -18,21 +18,20 @@ class AbstractBatchModule(nn.Module):
         self.batch = batch
 
     def load_state_dicts(
-            self, state_dict_or_dicts: Union[Iterable[StateDict], StateDict],
-            strict: bool = True):
-        if isinstance(state_dict_or_dicts, collections.abc.Mapping):
-            state_dict = {
-                k: einops.repeat(v, '... -> g ...', g=self.batch)
-                for k, v in state_dict_or_dicts.items()}
+        self, state_dict_or_dicts: Union[Sequence[StateDict], StateDict],
+        strict: bool = True
+    ) -> None:
+        state_dict: StateDict = OrderedDict()
+        if isinstance(state_dict_or_dicts, Mapping):
+            for k, v in state_dict_or_dicts.items():
+                state_dict[k] = einops.repeat(v, '... -> g ...', g=self.batch)
         else:
-            state_dict_or_dicts = list(state_dict_or_dicts)
-            state_dict = {}
             for k in state_dict_or_dicts[0]:
                 values = [d[k] for d in state_dict_or_dicts]
                 state_dict[k] = torch.stack(values)
-        return self.load_state_dict(state_dict, strict=strict)
+        self.load_state_dict(state_dict, strict=strict)
 
-    def state_dicts(self) -> StateDict:
+    def state_dicts(self) -> List[StateDict]:
         state = self.state_dict()
         states = [{} for _ in range(self.batch)]
         for k, v in state.items():
@@ -57,6 +56,9 @@ class AbstractBatchModule(nn.Module):
         x = einops.rearrange(
             x, '(b g) ... -> g b ...', b=self._batch_size(x), g=self.batch)
         return x
+
+    def extra_repr(self) -> str:
+        return f'{self.base_class.extra_repr(self)}, batch={self.batch}'
 
 
 class BatchModule(AbstractBatchModule):
@@ -85,7 +87,8 @@ class BatchModule(AbstractBatchModule):
         setattr(modules[parent_name], name, func(module, self.batch))
 
     def _create_batch_module(
-            self, model: nn.Module, inplace: bool=True) -> nn.Module:
+        self, model: nn.Module, inplace: bool = True
+    ) -> nn.Module:
         if not inplace:
             model = copy.deepcopy(model)
         fx_model = fx.symbolic_trace(model)
@@ -96,7 +99,9 @@ class BatchModule(AbstractBatchModule):
         module = fx.GraphModule(fx_model, graph)
         return module
 
-    def load_state_dict(self, state_dict: StateDict, strict: bool = True):
+    def load_state_dict(
+        self, state_dict: StateDict, strict: bool = True
+    ) -> None:
         self._module.load_state_dict(OrderedDict(state_dict), strict=strict)
 
     def state_dict(self) -> StateDict:
@@ -107,10 +112,14 @@ class BatchModule(AbstractBatchModule):
     ) -> Iterator[Tuple[str, nn.Parameter]]:
         return self._module.named_parameters(prefix=prefix, recurse=recurse)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x = self.merge_batch(x)
+    def forward(
+        self, x: torch.Tensor, merge: bool = True, split: bool = True
+    ) -> torch.Tensor:
+        if merge:
+            x = self.merge_batch(x)
         x = self._module(x)
-        # x = self.split_batch(x)
+        if split:
+            x = self.split_batch(x)
         return x
 
 
@@ -127,9 +136,12 @@ class BatchModule(AbstractBatchModule):
 
 
 class BatchLinear(AbstractBatchModule):
+    base_class = nn.Linear
+
     def __init__(
-            self, in_features: int, out_features: int,
-            bias: bool = True, batch: int = 1):
+        self, in_features: int, out_features: int,
+        bias: bool = True, batch: int = 1
+    ) -> None:
         super().__init__(batch)
         self.in_features = in_features
         self.out_features = out_features
@@ -146,16 +158,16 @@ class BatchLinear(AbstractBatchModule):
         x = torch.bmm(weight, x.unsqueeze(-1)).squeeze(-1) + bias
         return x
 
-    def extra_repr(self) -> str:
-        return torch.nn.Linear.extra_repr(self) + f', batch={self.batch}'
-
 
 class BatchConv2d(AbstractBatchModule):
+    base_class = nn.Conv2d
+
     def __init__(
-            self, in_channels: int, out_channels: int, kernel_size: int,
-            stride: int = 1, padding: int = 0, dilation: int = 1,
-            groups: int = 1, bias: bool = True, padding_mode: str = 'zeros',
-            batch: int = 1):
+        self, in_channels: int, out_channels: int, kernel_size: int,
+        stride: int = 1, padding: int = 0, dilation: int = 1,
+        groups: int = 1, bias: bool = True, padding_mode: str = 'zeros',
+        batch: int = 1
+    ) -> None:
         super().__init__(batch)
         self.in_channels = in_channels
         self.out_channels = out_channels
@@ -189,9 +201,6 @@ class BatchConv2d(AbstractBatchModule):
         x = einops.rearrange(
             x, 'b (g o) h w -> (b g) o h w', b=batch_size, g=self.batch)
         return x
-
-    def extra_repr(self) -> str:
-        return torch.nn.Conv2d.extra_repr(self) + f', batch={self.batch}'
 
 
 class BatchBatchNorm2d(AbstractBatchModule):
