@@ -64,7 +64,7 @@ class TestBase(unittest.TestCase):
         self.assertStatesAllClose(self.batch_module, self.modules)
 
     def test_forward_backward(self) -> None:
-        # FIXME this test fails 5% of the time.
+        # FIXME this test fails 5% of the time for conv.
         if self.xs is None:
             return
         # forward

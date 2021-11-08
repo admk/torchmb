@@ -13,6 +13,8 @@ StateDict = Dict[str, torch.Tensor]
 
 
 class AbstractBatchModule(nn.Module):
+    base_class = nn.Module
+
     def __init__(self, batch: int):
         super().__init__()
         self.batch = batch
@@ -62,7 +64,9 @@ class AbstractBatchModule(nn.Module):
         return x
 
     def extra_repr(self) -> str:
-        return f'{self.base_class.extra_repr(self)}, batch={self.batch}'
+        reprs = self.base_class.extra_repr(self).split(', ')
+        reprs.append(f'batch={self.batch}')
+        return ', '.join(r for r in reprs if r)
 
 
 class BatchModule(AbstractBatchModule):
@@ -125,6 +129,9 @@ class BatchModule(AbstractBatchModule):
         if split:
             x = self.split_batch(x)
         return x
+
+    def extra_repr(self) -> str:
+        return f'{super().extra_repr()}, '
 
 
 # class BatchElementWise(AbstractBatchModule):
