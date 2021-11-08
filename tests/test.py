@@ -1,5 +1,6 @@
 import unittest
-from typing import List, Tuple
+from typing import List, Tuple, Sequence, Mapping
+import functools
 
 import torch
 from torch import nn, Tensor
@@ -9,6 +10,9 @@ from torchmb.batch import (
     BatchLinear, BatchConv2d, BatchBatchNorm2d)
 
 
+StateDict = Mapping[str, Tensor]
+
+
 class TestBase(unittest.TestCase):
     rtoi = 1e-4
     atoi = 1e-4
@@ -16,14 +20,17 @@ class TestBase(unittest.TestCase):
     image_batch = 64
     xs = None
     batch_module: AbstractBatchModule
-    modules: List[nn.Module]
+    modules: List[nn.Module] = []
+    lr = 0.01
+    momentum = 0.5
+    weight_decay = 1e-3
 
     def forward(self, xs: Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         xs = xs.clone().detach().requires_grad_()
         xb = xs.clone().detach().requires_grad_()
-        rs = torch.stack([m(x) for m, x in zip(self.modules, xs)])
         ss = [m.state_dict() for m in self.modules]
         self.batch_module.load_state_dicts(ss)
+        rs = torch.stack([m(x) for m, x in zip(self.modules, xs)])
         rb = self.batch_module.merge_batch(xb)
         if isinstance(self.batch_module, BatchModule):
             rb = self.batch_module(rb, merge=False, split=False)
@@ -36,7 +43,28 @@ class TestBase(unittest.TestCase):
         self.assertIsNotNone(t.grad)
         return t.grad
 
+    def assertStatesAllClose(
+        self, batch_module: AbstractBatchModule, modules: Sequence[nn.Module]
+    ) -> None:
+        sb = batch_module.state_dicts()
+        ss = [m.state_dict() for m in modules]
+        self.assertEquals(len(sb), len(ss))
+        for a, b in zip(sb, ss):
+            keys = set(a.keys()) | set(b.keys())
+            for k in keys:
+                self.assertTrue(
+                    torch.allclose(a[k], b[k], self.rtoi, self.atoi),
+                    f'Key {k!r} mismatch.')
+
+    def test_state_dict(self) -> None:
+        if not self.modules:
+            return
+        ss = [m.state_dict() for m in self.modules]
+        self.batch_module.load_state_dicts(ss)
+        self.assertStatesAllClose(self.batch_module, self.modules)
+
     def test_forward_backward(self) -> None:
+        # FIXME this test fails 5% of the time.
         if self.xs is None:
             return
         # forward
@@ -57,6 +85,23 @@ class TestBase(unittest.TestCase):
         # input grads all close
         self.assertTrue(
             torch.allclose(self.grad(xs), self.grad(xb), self.rtoi, self.atoi))
+
+    def test_optimize(self) -> None:
+        if self.xs is None:
+            return
+        opt_func = functools.partial(
+            torch.optim.SGD, lr=self.lr, momentum=self.momentum,
+            weight_decay=self.weight_decay)
+        ob = opt_func(self.batch_module.parameters())
+        os = [opt_func(m.parameters()) for m in self.modules]
+        xs, xb, rs, rb = self.forward(self.xs)
+        # backward
+        rb.sum().backward()
+        rs.sum().backward()
+        ob.step()
+        for o in os:
+            o.step()
+        self.assertStatesAllClose(self.batch_module, self.modules)
 
 
 class TestLinear(TestBase):
@@ -104,9 +149,13 @@ class TestBatchNorm2d(TestBase):
             torch.nn.init.normal_(m.bias)
         self.batch_module = BatchBatchNorm2d(features, batch=self.model_batch)
 
+    def test_stats(self) -> None:
+        xs, xb, rs, rb = self.forward(self.xs)
+        self.assertStatesAllClose(self.batch_module, self.modules)
+
 
 class TestLeNet(TestBase):
-    def setUp(self):
+    def setUp(self) -> None:
         from lenet import LeNet
         self.xs = torch.randn(self.model_batch, self.image_batch, 1, 28, 28)
         self.modules = [LeNet() for _ in range(self.model_batch)]

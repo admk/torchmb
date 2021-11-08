@@ -35,9 +35,13 @@ class AbstractBatchModule(nn.Module):
         state = self.state_dict()
         states = [{} for _ in range(self.batch)]
         for k, v in state.items():
+            if v.ndim == 0:
+                raise ValueError(
+                    'Model batching expects batched parameter values. '
+                    f'Scalar found for parameter {k!r}.')
             if v.size(0) != self.batch:
                 raise ValueError(
-                    f'Model batching size mismatch for parameter: {k}, '
+                    f'Model batching size mismatch for parameter {k!r}, '
                     f'({self.batch} != {v.size(0)}).')
             for s, gv in zip(states, v):
                 s[k] = gv
@@ -226,13 +230,14 @@ class BatchBatchNorm2d(AbstractBatchModule):
             self.running_var = nn.Parameter(
                 torch.ones(batch, num_features), requires_grad=False)
             self.register_buffer(
-                'num_batches_tracked', torch.tensor(0, dtype=torch.long))
+                'num_batches_tracked', torch.zeros(batch, dtype=torch.long))
         else:
             self.register_parameter('running_mean', None)
             self.register_parameter('running_var', None)
             self.register_buffer("num_batches_tracked", None)
 
     def forward(self, x):
+        self.num_batches_tracked += 1
         batch_size = self._batch_size(x)
         x = einops.rearrange(
             x, '(b g) c h w -> b (g c) h w', b=batch_size, g=self.batch)
