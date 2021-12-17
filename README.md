@@ -74,16 +74,16 @@ will be independently updated in batch.
 
 ### Extending the Model Batcher
 
-If your custom module / functional
+If your custom module/functional
 is parameter-free and performs isolated computation
 for each image,
 you don't need to do anything,
 because we merge the `model_batch_size` dimension
-into `image_batch_size` for computation on default.
+into `image_batch_size` of the module input by default.
 To support custom computation,
 implement your `MyBatchModule` class
 by inheriting from `AbstractBatchModule`
-and register it with:
+and register it with `register_module`:
 ```python
 from torch import Tensor
 from torchmb import AbstractBatchModule, register_module
@@ -99,7 +99,12 @@ class MyBatchModule(AbstractBatchModule):
 
 register_module(MyModule, lambda module, batch: MyBatchModule(...))
 ```
-
+Note that in the forward method,
+in the first dimension of `batch_inputs`,
+all data values are arranged
+in the dictionary order of `(image_batch_size, model_batch_size)`.
+and the return value is also expected
+to assume the same data order.
 
 ## Caveats
 
