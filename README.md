@@ -74,7 +74,13 @@ will be independently updated in batch.
 
 ### Extending the Model Batcher
 
-To support custom modules,
+If your custom module / functional
+is parameter-free and performs isolated computation
+for each image,
+you don't need to do anything,
+because we merge the `model_batch_size` dimension
+into `image_batch_size` for computation on default.
+To support custom computation,
 implement your `MyBatchModule` class
 by inheriting from `AbstractBatchModule`
 and register it with:
