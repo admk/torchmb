@@ -1,60 +1,58 @@
-import unittest
-from typing import List, Tuple, Sequence, Mapping, Callable
+import random
 import functools
+from typing import List, Tuple, Mapping, Sequence
 
+import numpy as np
 import torch
 from torch import nn, Tensor
 
 from torchmb.batch import (
     AbstractBatchModule, BatchModule,
-from torchmb.functional import batch_loss, Reduction
+    BatchLinear, BatchConv2d, BatchBatchNorm2d,
+    merge_batch, split_batch)
+
+from base import TestBase
 
 
 StateDict = Mapping[str, Tensor]
 
 
-class TestBase(unittest.TestCase):
-    rtoi = 1e-4
-    atoi = 1e-4
+class TestLayerBase(TestBase):
     model_batch = 17
     image_batch = 64
     xs = None
     batch_module: AbstractBatchModule
     modules: List[nn.Module] = []
-    lr = 0.01
+    lr = 1
     momentum = 0.5
-    weight_decay = 1e-3
+    weight_decay = 1
 
     def forward(self, xs: Tensor) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         xs = xs.clone().detach().requires_grad_()
         xb = xs.clone().detach().requires_grad_()
         ss = [m.state_dict() for m in self.modules]
         self.batch_module.load_state_dicts(ss)
-        rs = torch.stack([m(x) for m, x in zip(self.modules, xs)])
-        rb = self.batch_module.merge_batch(xb)
+        rs = torch.stack([m(x) for m, x in zip(self.modules, xs)]).contiguous()
+        rb = merge_batch(xb)
         if isinstance(self.batch_module, BatchModule):
             rb = self.batch_module(rb, merge=False, split=False)
         else:
             rb = self.batch_module(rb)
-        rb = self.batch_module.split_batch(rb)
+        rb = split_batch(rb, self.model_batch)
         return xs, xb, rs, rb
-
-    def grad(self, t: Tensor) -> Tensor:
-        self.assertIsNotNone(t.grad)
-        return t.grad
 
     def assertStatesAllClose(
         self, batch_module: AbstractBatchModule, modules: Sequence[nn.Module]
     ) -> None:
         sb = batch_module.state_dicts()
         ss = [m.state_dict() for m in modules]
-        self.assertEquals(len(sb), len(ss))
+        self.assertEqual(len(sb), len(ss))
         for a, b in zip(sb, ss):
             keys = set(a.keys()) | set(b.keys())
             for k in keys:
                 self.assertTrue(
                     torch.allclose(a[k], b[k], self.rtoi, self.atoi),
-                    f'Key {k!r} mismatch.')
+                    f'Key {k!r} mismatch, {(a[k] - b[k]).abs().max()=}.')
 
     def test_state_dict(self) -> None:
         if not self.modules:
@@ -63,13 +61,27 @@ class TestBase(unittest.TestCase):
         self.batch_module.load_state_dicts(ss)
         self.assertStatesAllClose(self.batch_module, self.modules)
 
-    def test_forward_backward(self) -> None:
+    def test_forward(self) -> None:
+        if self.xs is None:
+            return
+        for m in self.modules:
+            m.eval()
+        self.batch_module.eval()
+        with torch.no_grad():
+            xs, xb, rs, rb = self.forward(self.xs)
+        self.assertTrue(
+            torch.allclose(rs, rb, self.rtoi, self.atoi),
+            f'{(rs - rb).abs().max()=}.')
+
+    def test_backward(self) -> None:
         # FIXME this test fails 5% of the time for conv.
         if self.xs is None:
             return
         # forward
         xs, xb, rs, rb = self.forward(self.xs)
-        self.assertTrue(torch.allclose(rs, rb, self.rtoi, self.atoi))
+        self.assertTrue(
+            torch.allclose(rs, rb, self.rtoi, self.atoi),
+            f'{(rs - rb).abs().max()=}')
         # backward
         rb.sum().backward()
         rs.sum().backward()
@@ -81,16 +93,56 @@ class TestBase(unittest.TestCase):
         # param grads all close
         for k in pb.keys():
             psk = torch.stack([self.grad(s[k]) for s in states])
-            self.assertTrue(torch.allclose(psk, pb[k], self.rtoi, self.atoi))
+            self.assertTrue(
+                torch.allclose(psk, pb[k], self.rtoi, self.atoi),
+                f'Gradient for key {k} does not match, '
+                f'{(psk - pb[k]).abs().max()=}')
         # input grads all close
+        gs, gb = self.grad(xs), self.grad(xb)
         self.assertTrue(
-            torch.allclose(self.grad(xs), self.grad(xb), self.rtoi, self.atoi))
+            torch.allclose(gs, gb, self.rtoi, self.atoi),
+            f'Gradient for input does not match, {(gs - gb).abs().max()=}')
+
+    def test_independent(self) -> None:
+        if self.xs is None:
+            return
+        xs, xb, rs, rb = self.forward(self.xs)
+        m = random.randint(0, self.model_batch - 1)
+        rs[m].sum().backward(retain_graph=True)
+        rb[m].sum().backward(retain_graph=True)
+        # input gradients
+        self.assertTrue(
+            torch.allclose(
+                self.grad(xs)[m], self.grad(xb)[m], self.rtoi, self.atoi),
+            f'Backprop to the input of {m}-th module failed.')
+        zero_idx = np.array([i != m for i in range(self.model_batch)])
+        self.assertEqual(
+            self.grad(xs)[zero_idx].abs().max(), 0,
+            f'Input gradient leaked to modules other than the {m}-th.')
+        # parameter gradients
+        parameters = [dict(m.named_parameters()) for m in self.modules]
+        for k, pb in self.batch_module.named_parameters():
+            ps = parameters[m][k]
+            gs = self.grad(ps)
+            gb = self.grad(pb)[m]
+            self.assertTrue(
+                torch.allclose(gs, gb, self.rtoi, self.atoi),
+                f'Gradient does not match for parameter {k!r} '
+                f'on the {m}-th module, {(gs - gb).abs().max()=}.')
+            gb = self.grad(pb)[zero_idx]
+            self.assertEqual(
+                gb.abs().max(), 0.0,
+                f'Parameter gradient leaked to modules other than the {m}-th, '
+                f'{gb.abs().max()=}.')
 
     def test_optimize(self) -> None:
         if self.xs is None:
             return
+        for m in self.modules:
+            m.train()
+        self.batch_module.train()
         opt_func = functools.partial(
-            torch.optim.SGD, lr=self.lr, momentum=self.momentum,
+            torch.optim.SGD, lr=self.lr, momentum=self.momentum, nesterov=True,
             weight_decay=self.weight_decay)
         ob = opt_func(self.batch_module.parameters())
         os = [opt_func(m.parameters()) for m in self.modules]
@@ -104,20 +156,27 @@ class TestBase(unittest.TestCase):
         self.assertStatesAllClose(self.batch_module, self.modules)
 
 
-class TestLinear(TestBase):
+class TestLinear(TestLayerBase):
+    rtoi = 1e-5
+    atoi = 1e-5
+
     def setUp(self):
         in_features = 100
         out_features = 200
+        device = torch.device('cpu')
         self.xs = torch.randn(
-            self.model_batch, self.image_batch, in_features)
+            self.model_batch, self.image_batch, in_features).to(device)
         self.modules = [
-            nn.Linear(in_features, out_features, True)
+            nn.Linear(in_features, out_features, True).to(device)
             for _ in range(self.model_batch)]
         self.batch_module = BatchLinear(
-            in_features, out_features, True, self.model_batch)
+            in_features, out_features, True, self.model_batch).to(device)
 
 
-class TestConv2d(TestBase):
+class TestConv2d(TestLayerBase):
+    rtoi = 1e-4
+    atoi = 1e-4
+
     def setUp(self) -> None:
         in_features = 100
         out_features = 200
@@ -133,7 +192,7 @@ class TestConv2d(TestBase):
             in_features, out_features, kernel_size, batch=self.model_batch)
 
 
-class TestBatchNorm2d(TestBase):
+class TestBatchNorm2d(TestLayerBase):
     def setUp(self) -> None:
         features = 100
         image_size = 8
@@ -143,69 +202,15 @@ class TestBatchNorm2d(TestBase):
         self.modules = [
             nn.BatchNorm2d(features) for _ in range(self.model_batch)]
         for m in self.modules:
+            torch.nn.init.uniform_(m.running_var, 1, 2)
             torch.nn.init.normal_(m.running_mean)
-            torch.nn.init.normal_(m.running_var)
-            torch.nn.init.normal_(m.weight)
+            torch.nn.init.uniform_(m.weight, 1, 2)
             torch.nn.init.normal_(m.bias)
         self.batch_module = BatchBatchNorm2d(features, batch=self.model_batch)
 
     def test_stats(self) -> None:
         xs, xb, rs, rb = self.forward(self.xs)
         self.assertStatesAllClose(self.batch_module, self.modules)
-
-
-class TestBatchLoss(TestBase):
-    model_batch = 17
-    image_batch = 64
-    num_classes = 10
-    rtoi = 1e-6
-    atoi = 1e-6
-
-    def setUp(self) -> None:
-        self.inputs = torch.randn(
-            self.model_batch, self.image_batch, self.num_classes)
-        self.targets = torch.randint(
-            0, self.num_classes - 1, (self.model_batch, self.image_batch))
-
-    def _test_forward(
-        self, loss_func: Callable[..., Tensor], reduction: Reduction
-    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
-        inputs = self.inputs.clone().detach()
-        inputs.requires_grad_()
-        targets = self.targets.clone().detach()
-        losses = torch.stack([
-            loss_func(inputs[b], targets[b], reduction=reduction)
-            for b in range(self.model_batch)])
-        batch_inputs = self.inputs.clone().detach()
-        batch_inputs.requires_grad_()
-        batch_targets = self.targets.clone().detach()
-        batch_losses = batch_loss(
-            batch_inputs, batch_targets, self.model_batch,
-            loss_func, reduction)
-        self.assertTrue(
-            torch.allclose(losses, batch_losses, self.rtoi, self.atoi),
-            f'Loss mismatch, {(losses - batch_losses).abs().max()=}.')
-        return inputs, losses, batch_inputs, batch_losses
-
-    def _test_backward(
-        self, inputs: Tensor, losses: Tensor,
-        batch_inputs: Tensor, batch_losses: Tensor,
-    ) -> None:
-        losses.sum().backward()
-        batch_losses.sum().backward()
-        igrad = self.grad(inputs)
-        bgrad = self.grad(batch_inputs)
-        close = torch.allclose(igrad, bgrad, self.rtoi, self.atoi)
-        self.assertTrue(
-            close, f'Gradient mismatch, {(igrad - bgrad).abs().max()=}.')
-
-    def _test_loss(
-        self, loss_func: Callable[..., Tensor], reduction: Reduction
-    ):
-        self._test_backward(*self._test_forward(loss_func, reduction))
-
-    def test_nll(self):
-        return self._test_loss(nn.functional.cross_entropy, 'mean')
 
 
 class TestLeNet(TestLayerBase):
@@ -217,7 +222,3 @@ class TestLeNet(TestLayerBase):
         self.xs = torch.randn(self.model_batch, self.image_batch, 1, 28, 28)
         self.modules = [LeNet() for _ in range(self.model_batch)]
         self.batch_module = BatchModule(LeNet(), self.model_batch, False)
-
-
-if __name__ == '__main__':
-    unittest.main()
