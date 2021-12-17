@@ -50,9 +50,9 @@ class TestLayerBase(TestBase):
         for a, b in zip(sb, ss):
             keys = set(a.keys()) | set(b.keys())
             for k in keys:
-                self.assertTrue(
-                    torch.allclose(a[k], b[k], self.rtoi, self.atoi),
-                    f'Key {k!r} mismatch, {(a[k] - b[k]).abs().max()=}.')
+                msg = f'Key {k!r} mismatch, {(a[k] - b[k]).abs().max()=}.'
+                self.assertAllClose(a[k], b[k], msg)
+
 
     def test_state_dict(self) -> None:
         if not self.modules:
@@ -69,9 +69,7 @@ class TestLayerBase(TestBase):
         self.batch_module.eval()
         with torch.no_grad():
             xs, xb, rs, rb = self.forward(self.xs)
-        self.assertTrue(
-            torch.allclose(rs, rb, self.rtoi, self.atoi),
-            f'{(rs - rb).abs().max()=}.')
+        self.assertAllClose(rs, rb, f'{(rs - rb).abs().max()=}.')
 
     def test_backward(self) -> None:
         # FIXME this test fails 5% of the time for conv.
@@ -79,9 +77,7 @@ class TestLayerBase(TestBase):
             return
         # forward
         xs, xb, rs, rb = self.forward(self.xs)
-        self.assertTrue(
-            torch.allclose(rs, rb, self.rtoi, self.atoi),
-            f'{(rs - rb).abs().max()=}')
+        self.assertAllClose(rs, rb, f'{(rs - rb).abs().max()=}')
         # backward
         rb.sum().backward()
         rs.sum().backward()
@@ -93,15 +89,14 @@ class TestLayerBase(TestBase):
         # param grads all close
         for k in pb.keys():
             psk = torch.stack([self.grad(s[k]) for s in states])
-            self.assertTrue(
-                torch.allclose(psk, pb[k], self.rtoi, self.atoi),
+            msg = (
                 f'Gradient for key {k} does not match, '
                 f'{(psk - pb[k]).abs().max()=}')
+            self.assertAllClose(psk, pb[k], msg)
         # input grads all close
         gs, gb = self.grad(xs), self.grad(xb)
-        self.assertTrue(
-            torch.allclose(gs, gb, self.rtoi, self.atoi),
-            f'Gradient for input does not match, {(gs - gb).abs().max()=}')
+        msg = f'Gradient for input does not match, {(gs - gb).abs().max()=}'
+        self.assertAllClose(gs, gb, msg)
 
     def test_independent(self) -> None:
         if self.xs is None:
@@ -111,9 +106,8 @@ class TestLayerBase(TestBase):
         rs[m].sum().backward(retain_graph=True)
         rb[m].sum().backward(retain_graph=True)
         # input gradients
-        self.assertTrue(
-            torch.allclose(
-                self.grad(xs)[m], self.grad(xb)[m], self.rtoi, self.atoi),
+        self.assertAllClose(
+            self.grad(xs)[m], self.grad(xb)[m],
             f'Backprop to the input of {m}-th module failed.')
         zero_idx = np.array([i != m for i in range(self.model_batch)])
         self.assertEqual(
@@ -125,8 +119,8 @@ class TestLayerBase(TestBase):
             ps = parameters[m][k]
             gs = self.grad(ps)
             gb = self.grad(pb)[m]
-            self.assertTrue(
-                torch.allclose(gs, gb, self.rtoi, self.atoi),
+            self.assertAllClose(
+                gs, gb,
                 f'Gradient does not match for parameter {k!r} '
                 f'on the {m}-th module, {(gs - gb).abs().max()=}.')
             gb = self.grad(pb)[zero_idx]
