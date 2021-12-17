@@ -2,8 +2,27 @@ from typing import Callable, Any, Literal, Sequence
 
 import torch
 from torch import nn, Tensor
+import einops
 
-from .base import merge_batch, split_batch, inner_batch_size
+from .base import DataOrder
+
+
+def inner_batch_size(x: Tensor, batch: int) -> int:
+    if x.shape[0] % batch:
+        raise RuntimeError(
+            f'Tensor with shape {x.shape} '
+            f'cannot be split into {batch} batches.')
+    return x.shape[0] // batch
+
+
+def merge_batch(x: Tensor, data_order: DataOrder = 'g b') -> Tensor:
+    return einops.rearrange(x, f'{data_order} ... -> (b g) ...')
+
+
+def split_batch(
+    x: Tensor, batch: int, data_order: DataOrder = 'g b'
+) -> Tensor:
+    return einops.rearrange(x, f'(b g) ... -> {data_order} ...', g=batch)
 
 
 Reduction = Literal['none', 'mean', 'sum']

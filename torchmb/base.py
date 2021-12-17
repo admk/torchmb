@@ -1,11 +1,14 @@
-from typing import Union, Sequence, Mapping, List, Dict, OrderedDict
+from typing import (
+    Union, Sequence, Mapping, List, Dict, OrderedDict, Literal, Callable)
 
 import einops
 import torch
-from torch import nn
+from torch import nn, Tensor
 
 
-StateDict = Dict[str, torch.Tensor]
+StateDict = Dict[str, Tensor]
+DataOrder = Literal['g b', '(g b)', 'b g', '(b g)']
+ForwardFunc = Callable[[Tensor], Tensor]
 
 
 class AbstractBatchModule(nn.Module):
@@ -44,20 +47,6 @@ class AbstractBatchModule(nn.Module):
             for s, gv in zip(states, v):
                 s[k] = gv
         return states
-
-    def _batch_size(self, x: torch.Tensor) -> int:
-        if x.size(0) % self.batch:
-            raise ValueError(
-                'The size of tensor is not divisible by model batch size.')
-        return x.size(0) // self.batch
-
-    def merge_batch(self, x: torch.Tensor) -> torch.Tensor:
-        return einops.rearrange(x, 'g b ... -> (b g) ...')
-
-    def split_batch(self, x: torch.Tensor) -> torch.Tensor:
-        x = einops.rearrange(
-            x, '(b g) ... -> g b ...', b=self._batch_size(x), g=self.batch)
-        return x
 
     def extra_repr(self) -> str:
         reprs = self.base_class.extra_repr(self).split(', ')

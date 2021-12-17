@@ -1,11 +1,11 @@
 import copy
 from typing import Type, Dict, OrderedDict, Callable, Iterator, Tuple
 
-import torch
-from torch import nn, fx
+from torch import nn, fx, Tensor
 
-from .base import AbstractBatchModule, StateDict
+from .base import AbstractBatchModule, StateDict, DataOrder
 from .layers import BatchLinear, BatchConv2d, BatchBatchNorm2d
+from .functional import merge_batch, split_batch
 
 
 BATCH_FUNCS: Dict[Type, Callable[[nn.Module, int], nn.Module]] = {
@@ -79,13 +79,14 @@ class BatchModule(AbstractBatchModule):
         return self._module.named_parameters(prefix=prefix, recurse=recurse)
 
     def forward(
-        self, x: torch.Tensor, merge: bool = True, split: bool = True
-    ) -> torch.Tensor:
+        self, x: Tensor, merge: bool = True, split: bool = True,
+        data_order: DataOrder = 'g b'
+    ) -> Tensor:
         if merge:
-            x = self.merge_batch(x)
+            x = merge_batch(x, data_order)
         x = self._module(x)
         if split:
-            x = self.split_batch(x)
+            x = split_batch(x, self.batch, data_order)
         return x
 
     def extra_repr(self) -> str:

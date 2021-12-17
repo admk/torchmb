@@ -3,6 +3,7 @@ import torch
 from torch import nn
 
 from .base import AbstractBatchModule
+from .functional import inner_batch_size
 
 
 class BatchLinear(AbstractBatchModule):
@@ -22,9 +23,9 @@ class BatchLinear(AbstractBatchModule):
             self.bias = nn.Parameter(torch.Tensor(batch, out_features))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        batch_size = self._batch_size(x)
-        weight = einops.repeat(self.weight, 'g o i -> (b g) o i', b=batch_size)
-        bias = einops.repeat(self.bias, 'g o -> (b g) o', b=batch_size)
+        b = inner_batch_size(x, self.batch)
+        weight = einops.repeat(self.weight, 'g o i -> (b g) o i', b=b)
+        bias = einops.repeat(self.bias, 'g o -> (b g) o', b=b)
         x = torch.bmm(weight, x.unsqueeze(-1)).squeeze(-1) + bias
         return x
 
@@ -61,7 +62,7 @@ class BatchConv2d(AbstractBatchModule):
                 torch.Tensor(batch, out_channels), requires_grad=True)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        batch_size = self._batch_size(x)
+        batch_size = inner_batch_size(x, self.batch)
         x = einops.rearrange(
             x, '(b g) i h w -> b (g i) h w', b=batch_size, g=self.batch)
         weight = einops.rearrange(self.weight, 'g o i k l -> (g o) i k l')
@@ -92,22 +93,22 @@ class BatchBatchNorm2d(AbstractBatchModule):
             self.register_parameter('weight', None)
             self.register_parameter('bias', None)
         if self.track_running_stats:
-            self.running_mean = nn.Parameter(
-                torch.zeros(batch, num_features), requires_grad=False)
-            self.running_var = nn.Parameter(
-                torch.ones(batch, num_features), requires_grad=False)
+            self.register_buffer(
+                'running_mean', torch.zeros(batch, num_features))
+            self.register_buffer(
+                'running_var', torch.ones(batch, num_features))
             self.register_buffer(
                 'num_batches_tracked', torch.zeros(batch, dtype=torch.long))
         else:
-            self.register_parameter('running_mean', None)
-            self.register_parameter('running_var', None)
+            self.register_buffer('running_mean', None)
+            self.register_buffer('running_var', None)
             self.register_buffer("num_batches_tracked", None)
 
     def forward(self, x):
         self.num_batches_tracked += 1
-        batch_size = self._batch_size(x)
+        b = inner_batch_size(x, self.batch)
         x = einops.rearrange(
-            x, '(b g) c h w -> b (g c) h w', b=batch_size, g=self.batch)
+            x, '(b g) c h w -> b (g c) h w', b=b, g=self.batch)
         mean = self.running_mean.flatten()
         var = self.running_var.flatten()
         weight = self.weight.flatten()
@@ -115,5 +116,5 @@ class BatchBatchNorm2d(AbstractBatchModule):
         x = nn.functional.batch_norm(
             x, mean, var, weight, bias, self.training, self.momentum, self.eps)
         x = einops.rearrange(
-            x, 'b (g c) h w -> (b g) c h w', b=batch_size, g=self.batch)
+            x, 'b (g c) h w -> (b g) c h w', b=b, g=self.batch)
         return x
