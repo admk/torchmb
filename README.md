@@ -101,7 +101,7 @@ register_module(MyModule, lambda module, batch: MyBatchModule(...))
 ```
 
 
-### Caveats
+## Caveats
 
 To ensure isolated training in batched models,
 we performed extensive testing in `tests/test_(functional|layers).py`.
@@ -124,3 +124,6 @@ This is generally not an issue
 because in either case it is very difficult to predict
 how errors are introduced in the implementation,
 and the user has very little control over this.
+In any case,
+we do not assume liabilities in unintended behaviours,
+nor do we provide any warranties.
