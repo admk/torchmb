@@ -8,7 +8,9 @@ from .layers import BatchLinear, BatchConv2d, BatchBatchNorm2d
 from .functional import merge_batch, split_batch
 
 
-BATCH_FUNCS: Dict[Type, Callable[[nn.Module, int], nn.Module]] = {
+TransformFunc = Callable[[nn.Module, int], AbstractBatchModule]
+
+BATCH_FUNCS: Dict[Type[nn.Module], TransformFunc] = {
     nn.Linear: (
         lambda module, batch: BatchLinear(
             module.in_features, module.out_features, module.bias, batch)),
@@ -22,9 +24,13 @@ BATCH_FUNCS: Dict[Type, Callable[[nn.Module, int], nn.Module]] = {
         lambda module, batch: BatchBatchNorm2d(
             module.num_features, module.eps, module.momentum, module.affine,
             module.track_running_stats, batch)),
-    # nn.ReLU: BatchElementWise,
-    # nn.MaxPool2d: BatchElementWise,
 }
+
+
+def register_module(
+    module: Type[nn.Module], transformer: TransformFunc
+) -> None:
+    BATCH_FUNCS[module] = transformer
 
 
 class BatchModule(AbstractBatchModule):
