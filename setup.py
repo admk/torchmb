@@ -4,7 +4,6 @@ import datetime
 from setuptools import setup, find_packages
 
 VERSION = '0.1'
-REQUIREMENTS = ['torch']
 setup(
     # Metadata
     name='torchmb',
@@ -17,6 +16,6 @@ setup(
     license='MIT',
     packages=find_packages(exclude=('*test*',)),
     zip_safe=True,
-    install_requires=REQUIREMENTS,
+    install_requires=['torch', 'einops'],
     classifiers=['Programming Language :: Python :: 3'],
 )

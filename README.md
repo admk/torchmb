@@ -3,7 +3,7 @@
 ## Installation
 
 ```bash
-pip install "git+https://github.com/admk/torchmb.git#egg=<commit_hash>"
+pip install "git+https://github.com/admk/torchmb.git#egg=torchmb"
 ```
 
 ## Usage
