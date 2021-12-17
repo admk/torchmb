@@ -1,5 +1,5 @@
 import unittest
-from typing import List, Tuple, Sequence, Mapping
+from typing import List, Tuple, Sequence, Mapping, Callable
 import functools
 
 import torch
@@ -7,7 +7,7 @@ from torch import nn, Tensor
 
 from torchmb.batch import (
     AbstractBatchModule, BatchModule,
-    BatchLinear, BatchConv2d, BatchBatchNorm2d)
+from torchmb.functional import batch_loss, Reduction
 
 
 StateDict = Mapping[str, Tensor]
@@ -154,7 +154,64 @@ class TestBatchNorm2d(TestBase):
         self.assertStatesAllClose(self.batch_module, self.modules)
 
 
-class TestLeNet(TestBase):
+class TestBatchLoss(TestBase):
+    model_batch = 17
+    image_batch = 64
+    num_classes = 10
+    rtoi = 1e-6
+    atoi = 1e-6
+
+    def setUp(self) -> None:
+        self.inputs = torch.randn(
+            self.model_batch, self.image_batch, self.num_classes)
+        self.targets = torch.randint(
+            0, self.num_classes - 1, (self.model_batch, self.image_batch))
+
+    def _test_forward(
+        self, loss_func: Callable[..., Tensor], reduction: Reduction
+    ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
+        inputs = self.inputs.clone().detach()
+        inputs.requires_grad_()
+        targets = self.targets.clone().detach()
+        losses = torch.stack([
+            loss_func(inputs[b], targets[b], reduction=reduction)
+            for b in range(self.model_batch)])
+        batch_inputs = self.inputs.clone().detach()
+        batch_inputs.requires_grad_()
+        batch_targets = self.targets.clone().detach()
+        batch_losses = batch_loss(
+            batch_inputs, batch_targets, self.model_batch,
+            loss_func, reduction)
+        self.assertTrue(
+            torch.allclose(losses, batch_losses, self.rtoi, self.atoi),
+            f'Loss mismatch, {(losses - batch_losses).abs().max()=}.')
+        return inputs, losses, batch_inputs, batch_losses
+
+    def _test_backward(
+        self, inputs: Tensor, losses: Tensor,
+        batch_inputs: Tensor, batch_losses: Tensor,
+    ) -> None:
+        losses.sum().backward()
+        batch_losses.sum().backward()
+        igrad = self.grad(inputs)
+        bgrad = self.grad(batch_inputs)
+        close = torch.allclose(igrad, bgrad, self.rtoi, self.atoi)
+        self.assertTrue(
+            close, f'Gradient mismatch, {(igrad - bgrad).abs().max()=}.')
+
+    def _test_loss(
+        self, loss_func: Callable[..., Tensor], reduction: Reduction
+    ):
+        self._test_backward(*self._test_forward(loss_func, reduction))
+
+    def test_nll(self):
+        return self._test_loss(nn.functional.cross_entropy, 'mean')
+
+
+class TestLeNet(TestLayerBase):
+    rtoi = 1e-5
+    atoi = 1e-5
+
     def setUp(self) -> None:
         from lenet import LeNet
         self.xs = torch.randn(self.model_batch, self.image_batch, 1, 28, 28)
