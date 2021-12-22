@@ -1,36 +1,23 @@
 import copy
-from typing import Type, Dict, OrderedDict, Callable, Iterator, Tuple
+from typing import Dict, OrderedDict, Iterator, Tuple, Type, Sequence
 
+import torch
 from torch import nn, fx, Tensor
 
 from .base import AbstractBatchModule, StateDict, DataOrder
-from .layers import BatchLinear, BatchConv2d, BatchBatchNorm2d
+from .layers import Size, BatchLinear, BatchConv2d, BatchBatchNorm2d
 from .functional import merge_batch, split_batch
 
 
-TransformFunc = Callable[[nn.Module, int], AbstractBatchModule]
-
-BATCH_FUNCS: Dict[Type[nn.Module], TransformFunc] = {
-    nn.Linear: (
-        lambda module, batch: BatchLinear(
-            module.in_features, module.out_features, module.bias, batch)),
-    nn.Conv2d: (
-        lambda module, batch: BatchConv2d(
-            module.in_channels, module.out_channels,
-            module.kernel_size, module.stride, module.padding,
-            module.dilation, module.groups, module.bias,
-            module.padding_mode, batch)),
-    nn.BatchNorm2d: (
-        lambda module, batch: BatchBatchNorm2d(
-            module.num_features, module.eps, module.momentum, module.affine,
-            module.track_running_stats, batch)),
+BATCH_FUNCS: Dict[Type[nn.Module], Type[AbstractBatchModule]] = {
+    nn.Linear: BatchLinear,
+    nn.Conv2d: BatchConv2d,
+    nn.BatchNorm2d: BatchBatchNorm2d,
 }
 
 
-def register_module(
-    module: Type[nn.Module], transformer: TransformFunc
-) -> None:
-    BATCH_FUNCS[module] = transformer
+def register_batch_module(batch_module: Type[AbstractBatchModule]) -> None:
+    BATCH_FUNCS[batch_module.base_class] = batch_module
 
 
 class BatchModule(AbstractBatchModule):
@@ -40,7 +27,8 @@ class BatchModule(AbstractBatchModule):
         self.load_state_dicts(model.state_dict())
 
     def _match_replace(
-            self, node: fx.Node, modules: Dict[str, nn.Module]) -> None:
+        self, node: fx.Node, modules: Dict[str, nn.Module]
+    ) -> None:
         if len(node.args) == 0:
             return
         if not isinstance(node, fx.Node):
@@ -51,7 +39,7 @@ class BatchModule(AbstractBatchModule):
             return
         try:
             module = modules[node.target]
-            func = BATCH_FUNCS[type(module)]
+            func = BATCH_FUNCS[type(module)].from_module
         except KeyError:
             return
         *parent, name = node.target.rsplit('.', 1)
@@ -97,3 +85,42 @@ class BatchModule(AbstractBatchModule):
 
     def extra_repr(self) -> str:
         return f'{super().extra_repr()}, '
+
+
+def assert_all_close(
+    a: Tensor, b: Tensor, rtol: float = 1e-6, atol: float = 1e-6
+) -> None:
+    assert a.size() == b.size(), f'Size mismatch, "{a.size()} != "{b.size()}".'
+    msg = f'Values mismatch, {(a - b).abs().max()=}.'
+    assert torch.allclose(a, b, rtol=rtol, atol=atol, equal_nan=True), msg
+
+
+def test_batch_module(
+    module: nn.Module, input_shapes: Sequence[Size], batch: int = 3,
+    rtol: float = 1e-6, atol: float = 1e-6
+) -> None:
+    state = module.state_dict()
+    states = []
+    for _ in range(batch):
+        rand_state = {}
+        for k, v in state.items():
+            rand_state[k] = torch.rand_like(v)
+        states.append(rand_state)
+    batch_module = BATCH_FUNCS[type(module)].from_module(module, batch)
+    batch_module.load_state_dicts(states)
+    batch_inputs = [
+        torch.randn((batch, ) + tuple(shape))
+        for shape in input_shapes]
+    batch_outputs = batch_module(*[merge_batch(i) for i in batch_inputs])
+    nary = isinstance(batch_outputs, Tensor)
+    if nary:
+        batch_outputs = split_batch(batch_outputs, batch)
+    else:
+        batch_outputs = [split_batch(b, batch) for b in batch_outputs]
+    outputs = []
+    for i, inputs in enumerate(zip(*batch_inputs)):
+        module.load_state_dict(states[i])
+        if nary:
+            outputs.append(module(*inputs))
+    for a, b in zip(outputs, batch_outputs):
+        assert_all_close(a, b, rtol, atol)

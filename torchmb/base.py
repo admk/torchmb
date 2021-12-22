@@ -1,5 +1,5 @@
 from typing import (
-    Union, Sequence, Mapping, List, Dict, OrderedDict, Literal, Callable)
+    Union, Sequence, Mapping, List, Dict, OrderedDict, Literal, Callable, Type)
 
 import einops
 import torch
@@ -12,7 +12,13 @@ ForwardFunc = Callable[[Tensor], Tensor]
 
 
 class AbstractBatchModule(nn.Module):
-    base_class = nn.Module
+    base_class: Type[nn.Module] = nn.Module
+
+    @classmethod
+    def from_module(
+        cls, module: nn.Module, batch: int
+    ) -> 'AbstractBatchModule':
+        return cls(batch)
 
     def __init__(self, batch: int):
         super().__init__()

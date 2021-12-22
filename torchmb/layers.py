@@ -1,9 +1,21 @@
+from typing import Union, Tuple
+
 import einops
 import torch
 from torch import nn
 
 from .base import AbstractBatchModule
 from .functional import inner_batch_size
+
+
+Size = Union[torch.Size, Tuple[int, ...]]
+IntOrInts = Union[int, Size]
+
+
+def _to_int_tuple(value: IntOrInts, repeat: int = 2) -> Tuple[int, ...]:
+    if isinstance(value, int):
+        return (value, ) * repeat
+    return value
 
 
 class BatchLinear(AbstractBatchModule):
@@ -22,6 +34,12 @@ class BatchLinear(AbstractBatchModule):
         if bias is not None:
             self.bias = nn.Parameter(torch.Tensor(batch, out_features))
 
+    @classmethod
+    def from_module(cls, module, batch):
+        return cls(
+            module.in_features, module.out_features,
+            module.bias is not None, batch)
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         b = inner_batch_size(x, self.batch)
         weight = einops.repeat(self.weight, 'g o i -> (b g) o i', b=b)
@@ -33,23 +51,28 @@ class BatchLinear(AbstractBatchModule):
 class BatchConv2d(AbstractBatchModule):
     base_class = nn.Conv2d
 
+    @classmethod
+    def from_module(cls, module: nn.Conv2d, batch: int) -> 'BatchConv2d':
+        return cls(
+            module.in_channels, module.out_channels,
+            module.kernel_size, module.stride, module.padding,
+            module.dilation, module.groups, module.bias is not None,
+            module.padding_mode, batch)
+
     def __init__(
-        self, in_channels: int, out_channels: int, kernel_size: int,
-        stride: int = 1, padding: int = 0, dilation: int = 1,
+        self, in_channels: int, out_channels: int,
+        kernel_size: IntOrInts, stride: IntOrInts = 1,
+        padding: IntOrInts = 0, dilation: IntOrInts = 1,
         groups: int = 1, bias: bool = True, padding_mode: str = 'zeros',
         batch: int = 1
     ) -> None:
         super().__init__(batch)
         self.in_channels = in_channels
         self.out_channels = out_channels
-        if isinstance(kernel_size, int):
-            self.kernel_size = (kernel_size, ) * 2
-        else:
-            self.kernel_size = kernel_size
-        self.stride = stride
-        self.padding = padding
-        self.output_padding = (0, 0)
-        self.dilation = dilation
+        self.kernel_size = _to_int_tuple(kernel_size)
+        self.stride = _to_int_tuple(stride)
+        self.padding = _to_int_tuple(padding)
+        self.dilation = _to_int_tuple(dilation)
         self.groups = groups
         self.bias = bias
         self.padding_mode = padding_mode
@@ -76,6 +99,16 @@ class BatchConv2d(AbstractBatchModule):
 
 
 class BatchBatchNorm2d(AbstractBatchModule):
+    base_class = nn.BatchNorm2d
+
+    @classmethod
+    def from_module(
+        cls, module: nn.BatchNorm2d, batch: int
+    ) -> 'BatchBatchNorm2d':
+        return cls(
+            module.num_features, module.eps, module.momentum, module.affine,
+            module.track_running_stats, batch)
+
     def __init__(
             self, num_features: int, eps: float = 1e-5, momentum: float = 0.1,
             affine: bool = True, track_running_stats: bool = True,

@@ -80,16 +80,23 @@ for each image,
 you don't need to do anything,
 because we merge the `model_batch_size` dimension
 into `image_batch_size` of the module input by default.
-To support custom computation,
+To support custom modules
+(for instance, `MyModule`) in torchmb,
 implement your `MyBatchModule` class
 by inheriting from `AbstractBatchModule`
 and register it with `register_module`:
 ```python
 from torch import Tensor
-from torchmb import AbstractBatchModule, register_module
+from torchmb import AbstractBatchModule, register_batch_module
 
 
 class MyBatchModule(AbstractBatchModule):
+    base_class = MyModule
+
+    @classmethod
+    def from_module(cls, module: MyModule, batch: int) -> 'MyBatchModule':
+        return cls(...)
+
     def __init__(self, batch: int, ...):
         super().__init__(batch)
         ...
@@ -97,7 +104,7 @@ class MyBatchModule(AbstractBatchModule):
     def forward(self, batch_inputs: Tensor) -> Tensor:
         ...
 
-register_module(MyModule, lambda module, batch: MyBatchModule(...))
+register_batch_module(MyModule)
 ```
 Note that in the forward method,
 in the first dimension of `batch_inputs`,
