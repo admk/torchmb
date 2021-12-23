@@ -1,5 +1,5 @@
 import copy
-from typing import Dict, OrderedDict, Iterator, Tuple, Type, Sequence
+from typing import Dict, OrderedDict, Iterator, Tuple, Type, Sequence, List
 
 import torch
 from torch import nn, fx, Tensor
@@ -20,6 +20,23 @@ def register_batch_module(batch_module: Type[AbstractBatchModule]) -> None:
     BATCH_FUNCS[batch_module.base_class] = batch_module
 
 
+def to_batch_module(module: nn.Module, batch: int) -> AbstractBatchModule:
+    return BATCH_FUNCS[type(module)].from_module(module, batch)
+
+
+class _Tracer(fx.Tracer):
+    def symbolic_trace(self, module: nn.Module) -> fx.GraphModule:
+        graph = super().trace(module)
+        return fx.GraphModule(module, graph, module.__class__.__name__)
+
+    def is_leaf_module(
+        self, module: nn.Module, module_qualified_name: str
+    ) -> bool:
+        if any(isinstance(module, module_cls) for module_cls in BATCH_FUNCS):
+            return True
+        return super().is_leaf_module(module, module_qualified_name)
+
+
 class BatchModule(AbstractBatchModule):
     def __init__(self, model: nn.Module, batch: int = 1, inplace: bool = True):
         super().__init__(batch)
@@ -27,7 +44,8 @@ class BatchModule(AbstractBatchModule):
         self.load_state_dicts(model.state_dict())
 
     def _match_replace(
-        self, node: fx.Node, modules: Dict[str, nn.Module]
+        self, node: fx.Node, modules: Dict[str, nn.Module],
+        shared_buffers: List[str]
     ) -> None:
         if len(node.args) == 0:
             return
@@ -37,25 +55,27 @@ class BatchModule(AbstractBatchModule):
             return
         if not isinstance(node.target, str):
             return
+        module = modules[node.target]
         try:
-            module = modules[node.target]
-            func = BATCH_FUNCS[type(module)].from_module
+            batch_module = to_batch_module(module, self.batch)
         except KeyError:
             return
         *parent, name = node.target.rsplit('.', 1)
         parent_name = parent[0] if parent else ''
-        setattr(modules[parent_name], name, func(module, self.batch))
+        setattr(modules[parent_name], name, batch_module)
+        for n in batch_module.shared_buffers:
+            shared_buffers.append(f'{node.target}.{n}')
 
     def _create_batch_module(
         self, model: nn.Module, inplace: bool = True
     ) -> nn.Module:
         if not inplace:
             model = copy.deepcopy(model)
-        fx_model = fx.symbolic_trace(model)
+        fx_model = _Tracer().symbolic_trace(model)
         modules = dict(fx_model.named_modules())
         graph = copy.deepcopy(fx_model.graph)
         for node in graph.nodes:
-            self._match_replace(node, modules)
+            self._match_replace(node, modules, self._shared_buffers)
         module = fx.GraphModule(fx_model, graph)
         return module
 

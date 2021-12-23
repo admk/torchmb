@@ -76,6 +76,7 @@ class BatchConv2d(AbstractBatchModule):
         self.groups = groups
         self.bias = bias
         self.padding_mode = padding_mode
+        self.output_padding = (0, ) * len(self.padding)  # required for repr
         self.weight = nn.Parameter(
             torch.Tensor(batch, out_channels, in_channels, *self.kernel_size),
             requires_grad=True)

@@ -23,6 +23,17 @@ class AbstractBatchModule(nn.Module):
     def __init__(self, batch: int):
         super().__init__()
         self.batch = batch
+        self._shared_buffers = []
+
+    @property
+    def shared_buffers(self):
+        return tuple(self._shared_buffers)
+
+    def register_shared_buffer(
+        self, name: str, tensor: Tensor, persistent: bool = True
+    ) -> None:
+        self._shared_buffers.append(name)
+        return self.register_buffer(name, tensor, persistent)
 
     def load_state_dicts(
         self, state_dict_or_dicts: Union[Sequence[StateDict], StateDict],
@@ -31,17 +42,30 @@ class AbstractBatchModule(nn.Module):
         state_dict: StateDict = OrderedDict()
         if isinstance(state_dict_or_dicts, Mapping):
             for k, v in state_dict_or_dicts.items():
-                state_dict[k] = einops.repeat(v, '... -> g ...', g=self.batch)
+                if k not in self.shared_buffers:
+                    v = einops.repeat(v, '... -> g ...', g=self.batch)
+                state_dict[k] = v
         else:
             for k in state_dict_or_dicts[0]:
                 values = [d[k] for d in state_dict_or_dicts]
-                state_dict[k] = torch.stack(values)
+                if k not in self.shared_buffers:
+                    values = torch.stack(values)
+                else:
+                    if strict:
+                        if any((v != values[0]).any() for v in values[1:]):
+                            raise ValueError(
+                                'Shared buffer should have the same values.')
+                    values = values[0]
+                state_dict[k] = values
         self.load_state_dict(state_dict, strict=strict)
 
     def state_dicts(self) -> List[StateDict]:
         state = self.state_dict()
         states = [{} for _ in range(self.batch)]
         for k, v in state.items():
+            if k in self.shared_buffers:
+                s[k] = v
+                continue
             if v.ndim == 0:
                 raise ValueError(
                     'Model batching expects batched parameter values. '
