@@ -45,7 +45,7 @@ from torchmb import batch_loss
 
 loss_func = nn.functional.cross_entropy
 losses = batch_loss(
-    batch_inputs, batch_targets, self.model_batch, loss_func, 'mean')
+    batch_inputs, batch_targets, model_batch_size, loss_func, 'mean')
 ```
 This computes a batch of loss values `losses`
 with shape `(model_batch_size)`.
@@ -54,7 +54,7 @@ Similarly, for top-K accuracy evaluation, use:
 ```python
 from torchmb import batch_topk
 
-accs = batch_topk(batch_inputs, batch_targets, self.model_batch, (1, 5))
+accs = batch_topk(batch_inputs, batch_targets, model_batch_size, (1, 5))
 ```
 where `accs` is a batch of top-1 and top-5 accuracies
 with shape `(2, model_batch_size)`,
