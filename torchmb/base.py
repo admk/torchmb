@@ -59,12 +59,14 @@ class AbstractBatchModule(nn.Module):
                 state_dict[k] = values
         self.load_state_dict(state_dict, strict=strict)
 
-    def state_dicts(self) -> List[StateDict]:
+    def state_dicts(self, device=None) -> List[StateDict]:
         state = self.state_dict()
         states = [{} for _ in range(self.batch)]
         for k, v in state.items():
+            v = v.to(device) if device is not None else v
             if k in self.shared_buffers:
-                s[k] = v
+                for b in range(self.batch):
+                    states[b][k] = v
                 continue
             if v.ndim == 0:
                 raise ValueError(
