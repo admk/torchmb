@@ -4,7 +4,7 @@ from typing import Dict, OrderedDict, Iterator, Tuple, Type, Sequence, List
 import torch
 from torch import nn, fx, Tensor
 
-from .base import AbstractBatchModule, StateDict, DataOrder
+from .base import AbstractBatchModule, StateDict, DataOrder, TupleTensor
 from .layers import Size, BatchLinear, BatchConv2d, BatchBatchNorm2d
 from .functional import merge_batch, split_batch
 
@@ -94,14 +94,21 @@ class BatchModule(AbstractBatchModule):
 
     def forward(
         self, x: Tensor, merge: bool = True, split: bool = True,
-        data_order: DataOrder = 'g b'
+        data_order: DataOrder = 'g b', hidden: TupleTensor = None,
     ) -> Tensor:
         if merge:
             x = merge_batch(x, data_order)
-        x = self._module(x)
+        if hidden == None:
+            x = self._module(x)
+        else:
+            x, h = self._module(x, hidden) # rnn
         if split:
-            x = split_batch(x, self.batch, data_order)
-        return x
+            if hidden == None:
+                x = split_batch(x, self.batch, data_order)
+                return x
+            else:
+                x = split_batch(x, self.batch, data_order)
+                return x, h
 
     def extra_repr(self) -> str:
         return f'{super().extra_repr()}, '

@@ -1,5 +1,5 @@
 from typing import (
-    Union, Sequence, Mapping, List, Dict, OrderedDict, Literal, Callable, Type)
+    Union, Sequence, Mapping, List, Dict, OrderedDict, Literal, Callable, Type, Tuple)
 
 import einops
 import torch
@@ -9,7 +9,7 @@ from torch import nn, Tensor
 StateDict = Dict[str, Tensor]
 DataOrder = Literal['g b', '(g b)', 'b g', '(b g)']
 ForwardFunc = Callable[[Tensor], Tensor]
-
+TupleTensor = Tuple[Tensor, Tensor]
 
 class AbstractBatchModule(nn.Module):
     base_class: Type[nn.Module] = nn.Module
