@@ -37,7 +37,7 @@ def batch_loss(
     batch_targets = merge_batch(batch_targets)
     loss = loss_func(
         batch_inputs, batch_targets, **kwargs, reduction='none')
-    loss = split_batch(loss, batch)
+    loss = split_batch(loss, batch=batch)
     if reduction == 'none':
         return loss
     if reduction == 'mean':
@@ -55,7 +55,7 @@ def batch_topk(
     batch_targets = merge_batch(batch_targets)
     pred = batch_inputs.topk(max(k), 1, True, True)[1]
     correct = pred == batch_targets.unsqueeze(1)
-    correct = torch.cumsum(split_batch(correct, batch), 2)
+    correct = torch.cumsum(split_batch(correct, batch=batch), 2)
     indices = torch.tensor(k, device=correct.device)
     correct = correct.index_select(2, indices - 1)
     correct = torch.einsum('gbc -> cg', correct)

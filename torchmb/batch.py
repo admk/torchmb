@@ -94,22 +94,21 @@ class BatchModule(AbstractBatchModule):
         return self._module.named_parameters(prefix=prefix, recurse=recurse)
 
     def forward(
-        self, x: Tensor, merge: bool = True, split: bool = True,
-        data_order: DataOrder = 'g b', hidden: TupleTensor = None,
-    ) -> Tensor:
+        self, *x: Tensor, merge: bool = True, split: bool = True,
+        data_order: DataOrder = 'g b'
+    ) -> Union[Tensor, TensorOrTensors]:
         if merge:
-            x = merge_batch(x, data_order)
-        if hidden == None:
-            x = self._module(x)
-        else:
-            x, h = self._module(x, hidden) # rnn
+            x = tuple(merge_batch(t, data_order) for t in x)
+        x = self._module(*x)
         if split:
-            if hidden == None:
-                x = split_batch(x, self.batch, data_order)
-                return x
+            if isinstance(x, Tensor):
+                x = (split_batch(x, self.batch, data_order), )
+            elif isinstance(x, tuple):
+                x = tuple(split_batch(t, self.batch, data_order) for t in x)
             else:
-                x = split_batch(x, self.batch, data_order)
-                return x, h
+                raise NotImplementedError(
+                    f'Unsupported return type {type(x)}.')
+        return x[0] if len(x) == 1 else x
 
     def extra_repr(self) -> str:
         return f'{super().extra_repr()}, '
