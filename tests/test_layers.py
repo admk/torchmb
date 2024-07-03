@@ -212,7 +212,20 @@ class TestLeNet(TestLayerBase):
     atoi = 1e-5
 
     def setUp(self) -> None:
-        from lenet import LeNet
+        from .lenet import LeNet
         self.xs = torch.randn(self.model_batch, self.image_batch, 1, 28, 28)
         self.modules = [LeNet() for _ in range(self.model_batch)]
         self.batch_module = BatchModule(LeNet(), self.model_batch, False)
+
+
+class TestResNet(TestLayerBase):
+    rtoi = 1e-4
+    atoi = 1e-4
+    model_batch = 5
+    image_batch = 7
+
+    def setUp(self) -> None:
+        from .resnet import ResNet18
+        self.xs = torch.randn(self.model_batch, self.image_batch, 3, 32, 32)
+        self.modules = [ResNet18() for _ in range(self.model_batch)]
+        self.batch_module = BatchModule(ResNet18(), self.model_batch, False)
