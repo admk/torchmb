@@ -53,6 +53,9 @@ class BatchConv2d(AbstractBatchModule):
 
     @classmethod
     def from_module(cls, module: nn.Conv2d, batch: int) -> 'BatchConv2d':
+        if isinstance(module.padding, str):
+            raise NotImplementedError(
+                'Padding mode as string is not yet supported.')
         return cls(
             module.in_channels, module.out_channels,
             module.kernel_size, module.stride, module.padding,
@@ -74,14 +77,13 @@ class BatchConv2d(AbstractBatchModule):
         self.padding = _to_int_tuple(padding)
         self.dilation = _to_int_tuple(dilation)
         self.groups = groups
-        self.bias = bias
         self.padding_mode = padding_mode
         self.output_padding = (0, ) * len(self.padding)  # required for repr
         self.weight = nn.Parameter(
             torch.Tensor(batch, out_channels, in_channels, *self.kernel_size),
             requires_grad=True)
         self.bias = None
-        if bias is not None:
+        if bias:
             self.bias = nn.Parameter(
                 torch.Tensor(batch, out_channels), requires_grad=True)
 
@@ -90,7 +92,10 @@ class BatchConv2d(AbstractBatchModule):
         x = einops.rearrange(
             x, '(b g) i h w -> b (g i) h w', b=batch_size, g=self.batch)
         weight = einops.rearrange(self.weight, 'g o i k l -> (g o) i k l')
-        bias = einops.rearrange(self.bias, 'g o -> (g o)')
+        if self.bias is not None:
+            bias = einops.rearrange(self.bias, 'g o -> (g o)')
+        else:
+            bias = None
         x = nn.functional.conv2d(
             x, weight, bias, self.stride, self.padding,
             self.dilation, self.groups * self.batch)
