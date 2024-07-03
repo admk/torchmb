@@ -5,7 +5,7 @@ from torch import nn, Tensor
 
 from torchmb.functional import batch_topk, batch_loss, Reduction
 
-from base import TestBase
+from .base import TestBase
 
 
 class TestBatchFunctionalBase(TestBase):

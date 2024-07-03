@@ -1,10 +1,11 @@
 import copy
-from typing import Dict, OrderedDict, Iterator, Tuple, Type, Sequence, List
+from typing import (
+    Dict, OrderedDict, Iterator, Tuple, Type, Sequence, List, Union)
 
 import torch
 from torch import nn, fx, Tensor
 
-from .base import AbstractBatchModule, StateDict, DataOrder, TupleTensor
+from .base import AbstractBatchModule, StateDict, DataOrder, TensorOrTensors
 from .layers import Size, BatchLinear, BatchConv2d, BatchBatchNorm2d
 from .functional import merge_batch, split_batch
 
@@ -30,11 +31,11 @@ class _Tracer(fx.Tracer):
         return fx.GraphModule(module, graph, module.__class__.__name__)
 
     def is_leaf_module(
-        self, module: nn.Module, module_qualified_name: str
+        self, m: nn.Module, module_qualified_name: str
     ) -> bool:
-        if any(isinstance(module, module_cls) for module_cls in BATCH_FUNCS):
+        if any(isinstance(m, module_cls) for module_cls in BATCH_FUNCS):
             return True
-        return super().is_leaf_module(module, module_qualified_name)
+        return super().is_leaf_module(m, module_qualified_name)
 
 
 class BatchModule(AbstractBatchModule):
@@ -44,7 +45,7 @@ class BatchModule(AbstractBatchModule):
         self.load_state_dicts(model.state_dict())
 
     def _match_replace(
-        self, node: fx.Node, modules: Dict[str, nn.Module],
+        self, node: fx.Node, modules: Dict[str, fx.GraphModule],
         shared_buffers: List[str]
     ) -> None:
         if len(node.args) == 0:

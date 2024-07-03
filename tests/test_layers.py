@@ -11,7 +11,7 @@ from torchmb.batch import (
     BatchLinear, BatchConv2d, BatchBatchNorm2d,
     merge_batch, split_batch)
 
-from base import TestBase
+from .base import TestBase
 
 
 StateDict = Mapping[str, Tensor]
@@ -68,7 +68,7 @@ class TestLayerBase(TestBase):
             m.eval()
         self.batch_module.eval()
         with torch.no_grad():
-            xs, xb, rs, rb = self.forward(self.xs)
+            _, _, rs, rb = self.forward(self.xs)
         self.assertAllClose(rs, rb, f'{(rs - rb).abs().max()=}.')
 
     def test_backward(self) -> None:
@@ -108,7 +108,7 @@ class TestLayerBase(TestBase):
         # input gradients
         self.assertAllClose(
             self.grad(xs)[m], self.grad(xb)[m],
-            f'Backprop to the input of {m}-th module failed.')
+            f'Backprop to the input of the {m}-th module failed.')
         zero_idx = np.array([i != m for i in range(self.model_batch)])
         self.assertEqual(
             self.grad(xs)[zero_idx].abs().max(), 0,
@@ -140,7 +140,7 @@ class TestLayerBase(TestBase):
             weight_decay=self.weight_decay)
         ob = opt_func(self.batch_module.parameters())
         os = [opt_func(m.parameters()) for m in self.modules]
-        xs, xb, rs, rb = self.forward(self.xs)
+        _, _, rs, rb = self.forward(self.xs)
         # backward
         rb.sum().backward()
         rs.sum().backward()
@@ -203,7 +203,7 @@ class TestBatchNorm2d(TestLayerBase):
         self.batch_module = BatchBatchNorm2d(features, batch=self.model_batch)
 
     def test_stats(self) -> None:
-        xs, xb, rs, rb = self.forward(self.xs)
+        self.forward(self.xs)
         self.assertStatesAllClose(self.batch_module, self.modules)
 
 
