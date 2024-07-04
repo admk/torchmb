@@ -3,7 +3,9 @@ from typing import Tuple, Callable, Sequence, List
 import torch
 from torch import nn, Tensor
 
-from torchmb.functional import batch_topk, batch_loss, Reduction
+from torchmb.batch import BatcherTracer
+from torchmb.functional import (
+    batch_accuracy, batch_loss, Reduction, to_batch_func)
 
 from .base import TestBase
 
@@ -20,10 +22,46 @@ class TestBatchFunctionalBase(TestBase):
             0, self.num_classes - 1, (self.model_batch, self.image_batch))
 
 
-class TestBatchTopk(TestBatchFunctionalBase):
+class TestAutoBatchIndependent(TestBatchFunctionalBase):
+    # WIP
+    nonelementwise_funcs = {
+        # torch.nn.functional.softmax: [3],
+    }
+
+    def enumerate_forward(self, func, inputs):
+        outputs = []
+        for i in range(self.model_batch):
+            outputs.append(func(inputs[i]))
+        return torch.stack(outputs)
+
+    def batch_forward(self, func, inputs):
+        return to_batch_func(func, self.model_batch)(inputs)
+
+    def test_forward(self):
+        for func in self.nonelementwise_funcs:
+            outputs = self.enumerate_forward(func, self.inputs)
+            batch_outputs = self.batch_forward(func, self.inputs)
+            self.assertAllClose(batch_outputs, outputs)
+
+    def test_backward(self):
+        for func in self.nonelementwise_funcs:
+            inputs = self.inputs.clone().detach().requires_grad_()
+            batch_inputs = self.inputs.clone().detach().requires_grad_()
+            outputs = self.enumerate_forward(func, inputs)
+            batch_outputs = self.batch_forward(func, batch_inputs)
+            outputs.sum().backward()
+            batch_outputs.sum().backward()
+            igrad = inputs.grad
+            bgrad = batch_inputs.grad
+            self.assertAllClose(
+                igrad, bgrad,
+                f'Gradient mismatch, {(igrad - bgrad).abs().max()=}')
+
+
+class TestBatchAccuracy(TestBatchFunctionalBase):
     k = (1, 5)
 
-    def topk(
+    def accuracy(
         self, inputs: Tensor, targets: Tensor,
         k: Sequence[int] = (1, ), count: bool = False
     ) -> List[float]:
@@ -35,9 +73,9 @@ class TestBatchTopk(TestBatchFunctionalBase):
 
     def test_forward(self):
         topks = torch.tensor([
-            self.topk(i, t, self.k)
+            self.accuracy(i, t, self.k)
             for i, t in zip(self.inputs, self.targets)]).t()
-        batch_topks = batch_topk(
+        batch_topks = batch_accuracy(
             self.inputs, self.targets, self.model_batch, self.k)
         self.assertAllClose(
             topks, batch_topks, f'Value not matched:\n{topks}\n{batch_topks}')

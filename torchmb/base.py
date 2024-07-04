@@ -1,17 +1,10 @@
-from typing import (
-    Any, Union, Literal, Callable, Type,
-    Sequence, List, Tuple, Mapping, Dict, OrderedDict)
+from typing import Union, Sequence, Mapping, List, OrderedDict, Type
 
 import einops
 import torch
 from torch import nn, Tensor
 
-
-StateDict = Dict[str, Any]
-DataOrder = Literal['g b', '(g b)', 'b g', '(b g)']
-ForwardFunc = Callable[[Tensor], Tensor]
-Tensors = Tuple[Tensor, ...]
-TensorOrTensors = Union[Tensor, Tensors]
+from .types import StateDict
 
 
 class AbstractBatchModule(nn.Module):

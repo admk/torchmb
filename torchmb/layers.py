@@ -1,15 +1,12 @@
-from typing import Union, Tuple
+from typing import Tuple
 
 import einops
 import torch
 from torch import nn
 
 from .base import AbstractBatchModule
+from .types import IntOrInts
 from .functional import inner_batch_size
-
-
-Size = Union[torch.Size, Tuple[int, ...]]
-IntOrInts = Union[int, Size]
 
 
 def _to_int_tuple(value: IntOrInts, repeat: int = 2) -> Tuple[int, ...]:

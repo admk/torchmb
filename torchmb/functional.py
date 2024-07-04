@@ -1,10 +1,11 @@
-from typing import Callable, Any, Literal, Sequence
+from typing import Callable, Any, Literal, Sequence, Tuple
+import functools
 
 import torch
-from torch import nn, Tensor
+from torch import fx, nn, Tensor
 import einops
 
-from .base import DataOrder
+from .types import DataOrder, ELEMENTWISE_FUNCS, BATCH_INDEPENDENT_FUNCS
 
 
 def inner_batch_size(x: Tensor, batch: int) -> int:
@@ -23,6 +24,45 @@ def split_batch(
     x: Tensor, batch: int, data_order: DataOrder = 'g b'
 ) -> Tensor:
     return einops.rearrange(x, f'(b g) ... -> {data_order} ...', g=batch)
+
+
+def _recursive_apply(
+    func: Callable[..., Tensor], *args: Any, **kwargs: Any
+) -> Tuple[Tuple[Any, ...], dict]:
+    largs = list(args)
+    for i, arg in enumerate(args):
+        if isinstance(arg, Tensor):
+            largs[i] = func(arg)
+        elif isinstance(arg, (list, tuple)):
+            largs[i] = _recursive_apply(func, *arg)
+    for k, v in kwargs.items():
+        kwargs[k] = _recursive_apply(func, v)
+    return tuple(largs), kwargs
+
+
+def to_batch_func(
+    node: fx.Node, batch: int, data_order: DataOrder = 'g b'
+) -> Callable:
+    func = node.target
+    if func in ELEMENTWISE_FUNCS:
+        return func
+    if func in BATCH_INDEPENDENT_FUNCS:
+        def bif(*args, **kwargs):
+            args, kwargs = _recursive_apply(
+                lambda x: merge_batch(x, data_order), *args, **kwargs)
+            args = func(*args, **kwargs)
+            if not isinstance(args, tuple):
+                args = (args, )
+            args, _ = _recursive_apply(
+                lambda x: split_batch(x, batch, data_order), *args)
+            if isinstance(args, tuple) and len(args) == 1:
+                return args[0]
+            return args
+        bif = functools.wraps(func)(bif)
+        bif.__name__ = f'batch_{func.__name__}'
+        bif.__qualname__ = f'batch_{func.__qualname__}'
+        return bif
+    raise NotImplementedError(f'Function {func} not supported.')
 
 
 Reduction = Literal['none', 'mean', 'sum']
@@ -47,7 +87,7 @@ def batch_loss(
     raise ValueError(f'Unknown reduction method {reduction!r}.')
 
 
-def batch_topk(
+def batch_accuracy(
     batch_inputs: Tensor, batch_targets: Tensor, batch: int,
     k: Sequence[int] = (1, ), count: bool = False
 ) -> Tensor:

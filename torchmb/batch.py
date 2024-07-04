@@ -5,12 +5,15 @@ from typing import (
 import torch
 from torch import nn, fx, Tensor
 
-from .base import AbstractBatchModule, StateDict, DataOrder, TensorOrTensors
-from .layers import Size, BatchLinear, BatchConv2d, BatchBatchNorm2d
-from .functional import merge_batch, split_batch
+from .types import (
+    Size, StateDict, DataOrder, TensorOrTensors,
+    ELEMENTWISE_FUNCS, PARAMETER_FREE_ELEMENTWISE_MODULES)
+from .base import AbstractBatchModule
+from .layers import BatchLinear, BatchConv2d, BatchBatchNorm2d
+from .functional import merge_batch, split_batch, to_batch_func
 
 
-BATCH_FUNCS: Dict[Type[nn.Module], Type[AbstractBatchModule]] = {
+BATCH_MODULES: Dict[Type[nn.Module], Type[AbstractBatchModule]] = {
     nn.Linear: BatchLinear,
     nn.Conv2d: BatchConv2d,
     nn.BatchNorm2d: BatchBatchNorm2d,
@@ -18,14 +21,23 @@ BATCH_FUNCS: Dict[Type[nn.Module], Type[AbstractBatchModule]] = {
 
 
 def register_batch_module(batch_module: Type[AbstractBatchModule]) -> None:
-    BATCH_FUNCS[batch_module.base_class] = batch_module
+    BATCH_MODULES[batch_module.base_class] = batch_module
 
 
-def to_batch_module(module: nn.Module, batch: int) -> AbstractBatchModule:
-    return BATCH_FUNCS[type(module)].from_module(module, batch)
+def to_batch_module(
+    module: nn.Module, batch: int
+) -> Union[nn.Module, AbstractBatchModule]:
+    if isinstance(module, PARAMETER_FREE_ELEMENTWISE_MODULES):
+        return module
+    try:
+        batch_func = BATCH_MODULES[type(module)]
+    except KeyError as e:
+        raise NotImplementedError(
+            f'Batch module for {type(module)} is not registered.') from e
+    return batch_func.from_module(module, batch)
 
 
-class _Tracer(fx.Tracer):
+class BatcherTracer(fx.Tracer):
     def symbolic_trace(self, module: nn.Module) -> fx.GraphModule:
         graph = super().trace(module)
         return fx.GraphModule(module, graph, module.__class__.__name__)
@@ -33,7 +45,7 @@ class _Tracer(fx.Tracer):
     def is_leaf_module(
         self, m: nn.Module, module_qualified_name: str
     ) -> bool:
-        if any(isinstance(m, module_cls) for module_cls in BATCH_FUNCS):
+        if any(isinstance(m, module_cls) for module_cls in BATCH_MODULES):
             return True
         return super().is_leaf_module(m, module_qualified_name)
 
@@ -52,6 +64,16 @@ class BatchModule(AbstractBatchModule):
             return
         if not isinstance(node, fx.Node):
             return
+        if node.op == 'call_function':
+            if node.target in ELEMENTWISE_FUNCS:
+                return
+            try:
+                setattr(node, 'target', to_batch_func(node, self.batch))
+            except NotImplementedError:
+                print(
+                    f'Node: {node.format_node()}: '
+                    f'Function {node.target} not supported, '
+                    'please check model-sample confluence.')
         if node.op != 'call_module':
             return
         if not isinstance(node.target, str):
@@ -64,15 +86,16 @@ class BatchModule(AbstractBatchModule):
         *parent, name = node.target.rsplit('.', 1)
         parent_name = parent[0] if parent else ''
         setattr(modules[parent_name], name, batch_module)
-        for n in batch_module.shared_buffers:
-            shared_buffers.append(f'{node.target}.{n}')
+        if hasattr(batch_module, 'shared_buffers'):
+            for n in batch_module.shared_buffers:
+                shared_buffers.append(f'{node.target}.{n}')
 
     def _create_batch_module(
         self, model: nn.Module, inplace: bool = True
     ) -> nn.Module:
         if not inplace:
             model = copy.deepcopy(model)
-        fx_model = _Tracer().symbolic_trace(model)
+        fx_model = BatcherTracer().symbolic_trace(model)
         modules = dict(fx_model.named_modules())
         graph = copy.deepcopy(fx_model.graph)
         for node in graph.nodes:
@@ -133,7 +156,7 @@ def test_batch_module(
         for k, v in state.items():
             rand_state[k] = torch.rand_like(v)
         states.append(rand_state)
-    batch_module = BATCH_FUNCS[type(module)].from_module(module, batch)
+    batch_module = BATCH_MODULES[type(module)].from_module(module, batch)
     batch_module.load_state_dicts(states)
     batch_inputs = [
         torch.randn((batch, ) + tuple(shape))
