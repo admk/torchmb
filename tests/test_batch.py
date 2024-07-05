@@ -2,7 +2,8 @@ import torch
 from torch import nn
 
 from torchmb.base import AbstractBatchModule
-from torchmb.batch import register_batch_module, test_batch_module, BatchModule
+from torchmb.batch import register_batch_module, BatchModule
+from torchmb.batch import test_batch_module as _test_batch_module
 
 from tests.base import TestBase
 
@@ -60,4 +61,4 @@ class TestBatch(TestBase):
 
     def test_test_batch_module(self):
         module = nn.Conv2d(3, 32, 3)
-        test_batch_module(module, (self.input_shape, ), self.batch, atol=1e-5)
+        _test_batch_module(module, (self.input_shape, ), self.batch, atol=1e-5)

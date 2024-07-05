@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "torchmb"
+version = "0.2"
+authors = [
+  { name="admk" },
+]
+description = "PyTorch Model Batcher."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "torch",
+    "einops",
+]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+
+[project.urls]
+Homepage = "https://github.com/admk/torchmb"
+Issues = "https://github.com/admk/torchmb/issues"
+
+[tool.setuptools.packages.find]
+include = ["torchmb"]
+exclude = ["tests"]
