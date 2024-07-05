@@ -9,7 +9,7 @@ from .types import (
     Size, StateDict, DataOrder, TensorOrTensors,
     ELEMENTWISE_FUNCS, PARAMETER_FREE_ELEMENTWISE_MODULES)
 from .base import AbstractBatchModule
-from .layers import BatchLinear, BatchConv2d, BatchBatchNorm2d
+from .layers import BatchLinear, BatchConv2d, BatchBatchNorm2d, BatchGroupNorm
 from .functional import merge_batch, split_batch, to_batch_func
 
 
@@ -17,6 +17,7 @@ BATCH_MODULES: Dict[Type[nn.Module], Type[AbstractBatchModule]] = {
     nn.Linear: BatchLinear,
     nn.Conv2d: BatchConv2d,
     nn.BatchNorm2d: BatchBatchNorm2d,
+    nn.GroupNorm: BatchGroupNorm,
 }
 
 

@@ -8,7 +8,7 @@ from torch import nn, Tensor
 
 from torchmb.batch import (
     AbstractBatchModule, BatchModule,
-    BatchLinear, BatchConv2d, BatchBatchNorm2d,
+    BatchLinear, BatchConv2d, BatchBatchNorm2d, BatchGroupNorm,
     merge_batch, split_batch)
 
 from .base import TestBase
@@ -201,6 +201,28 @@ class TestBatchNorm2d(TestLayerBase):
             torch.nn.init.uniform_(m.weight, 1, 2)
             torch.nn.init.normal_(m.bias)
         self.batch_module = BatchBatchNorm2d(features, batch=self.model_batch)
+
+    def test_stats(self) -> None:
+        self.forward(self.xs)
+        self.assertStatesAllClose(self.batch_module, self.modules)
+
+
+class TestGroupNorm(TestLayerBase):
+    def setUp(self) -> None:
+        features = 100
+        image_size = 8
+        num_groups = 4
+        self.xs = torch.randn(
+            self.model_batch, self.image_batch,
+            features, image_size, image_size)
+        self.modules = [
+            nn.GroupNorm(num_groups, features)
+            for _ in range(self.model_batch)]
+        for m in self.modules:
+            torch.nn.init.uniform_(m.weight, 1, 2)
+            torch.nn.init.normal_(m.bias)
+        self.batch_module = BatchGroupNorm(
+            num_groups, features, batch=self.model_batch)
 
     def test_stats(self) -> None:
         self.forward(self.xs)

@@ -154,3 +154,44 @@ class BatchBatchNorm2d(AbstractBatchModule):
         x = einops.rearrange(
             x, 'b (g c) h w -> (b g) c h w', b=b, g=self.batch)
         return x
+
+
+class BatchGroupNorm(AbstractBatchModule):
+    base_class = nn.GroupNorm
+
+    @classmethod
+    def from_module(
+        cls, module: nn.GroupNorm, batch: int
+    ) -> 'BatchGroupNorm':
+        return cls(
+            module.num_groups, module.num_channels,
+            module.eps, module.affine, batch)
+
+    def __init__(
+        self, num_groups: int, num_channels: int,
+        eps: float = 1e-5, affine: bool = True, batch: int = 1
+    ) -> None:
+        super().__init__(batch)
+        self.num_groups = num_groups
+        self.num_channels = num_channels
+        if num_channels % num_groups != 0:
+            raise ValueError(
+                f'Number of channels ({num_channels}) must be divisible '
+                f'by number of groups ({num_groups}).')
+        self.eps = eps
+        self.affine = affine
+        if self.affine:
+            self.weight = nn.Parameter(torch.ones(batch, num_channels))
+            self.bias = nn.Parameter(torch.zeros(batch, num_channels))
+        else:
+            self.register_parameter('weight', None)
+            self.register_parameter('bias', None)
+
+    def forward(self, x):
+        weight = einops.rearrange(self.weight, 'g c -> (g c)')
+        bias = einops.rearrange(self.bias, 'g c -> (g c)')
+        x = einops.rearrange(x, '(b g) c ... -> b (g c) ...', g=self.batch)
+        x = nn.functional.group_norm(
+            x, self.batch * self.num_groups, weight, bias, self.eps)
+        x = einops.rearrange(x, 'b (g c) ... -> (b g) c ...', g=self.batch)
+        return x
