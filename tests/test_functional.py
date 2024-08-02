@@ -1,11 +1,10 @@
-from typing import Tuple, Callable, Sequence, List
+from typing import Tuple, Callable, Sequence, List, Literal
 
 import torch
 from torch import nn, Tensor
 
-from torchmb.batch import BatcherTracer
-from torchmb.functional import (
-    batch_accuracy, batch_loss, Reduction, to_batch_func)
+from torchmb.functional import batch_accuracy, batch_loss
+from torchmb.utils import to_batch_func
 
 from .base import TestBase
 
@@ -53,9 +52,12 @@ class TestAutoBatchIndependent(TestBatchFunctionalBase):
             batch_outputs.sum().backward()
             igrad = inputs.grad
             bgrad = batch_inputs.grad
+            self.assertIsNotNone(igrad, 'Input gradient is None.')
+            self.assertIsNotNone(bgrad, 'Batch input gradient is None.')
             self.assertAllClose(
-                igrad, bgrad,
-                f'Gradient mismatch, {(igrad - bgrad).abs().max()=}')
+                igrad, bgrad,  # type: ignore
+                'Gradient mismatch, '
+                f'{(igrad - bgrad).abs().max()=}')  # type: ignore
 
 
 class TestBatchAccuracy(TestBatchFunctionalBase):
@@ -86,7 +88,8 @@ class TestBatchLoss(TestBatchFunctionalBase):
     atoi = 1e-6
 
     def _test_forward(
-        self, loss_func: Callable[..., Tensor], reduction: Reduction
+        self, loss_func: Callable[..., Tensor],
+        reduction: Literal['none', 'mean', 'sum']
     ) -> Tuple[Tensor, Tensor, Tensor, Tensor]:
         inputs = self.inputs.clone().detach()
         inputs.requires_grad_()
@@ -118,7 +121,8 @@ class TestBatchLoss(TestBatchFunctionalBase):
             f'Gradient mismatch, {(igrad - bgrad).abs().max()=}.')
 
     def _test_loss(
-        self, loss_func: Callable[..., Tensor], reduction: Reduction
+        self, loss_func: Callable[..., Tensor],
+        reduction: Literal['none', 'mean', 'sum']
     ):
         self._test_backward(*self._test_forward(loss_func, reduction))
 

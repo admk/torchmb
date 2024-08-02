@@ -1,41 +1,17 @@
 import copy
 from typing import (
-    Dict, OrderedDict, Iterator, Tuple, Type, Sequence, List, Union)
+    Callable, Union, Dict, OrderedDict,
+    Iterator, Tuple, List)
 
-import torch
 from torch import nn, fx, Tensor
 
 from .types import (
-    Size, StateDict, DataOrder, TensorOrTensors,
-    ELEMENTWISE_FUNCS, PARAMETER_FREE_ELEMENTWISE_MODULES)
+    StateDict, DataOrder, TensorOrTensors,
+    ELEMENTWISE_FUNCS, PARAMETER_FREE_ELEMENTWISE_MODULES,
+    BATCH_DEPENDENT_MODULES)
 from .base import AbstractBatchModule
-from .layers import BatchLinear, BatchConv2d, BatchBatchNorm2d, BatchGroupNorm
-from .functional import merge_batch, split_batch, to_batch_func
-
-
-BATCH_MODULES: Dict[Type[nn.Module], Type[AbstractBatchModule]] = {
-    nn.Linear: BatchLinear,
-    nn.Conv2d: BatchConv2d,
-    nn.BatchNorm2d: BatchBatchNorm2d,
-    nn.GroupNorm: BatchGroupNorm,
-}
-
-
-def register_batch_module(batch_module: Type[AbstractBatchModule]) -> None:
-    BATCH_MODULES[batch_module.base_class] = batch_module
-
-
-def to_batch_module(
-    module: nn.Module, batch: int
-) -> Union[nn.Module, AbstractBatchModule]:
-    if isinstance(module, PARAMETER_FREE_ELEMENTWISE_MODULES):
-        return module
-    try:
-        batch_func = BATCH_MODULES[type(module)]
-    except KeyError as e:
-        raise NotImplementedError(
-            f'Batch module for {type(module)} is not registered.') from e
-    return batch_func.from_module(module, batch)
+from .functional import merge_batch, split_batch
+from .utils import to_batch_func, BATCH_MODULES
 
 
 class BatcherTracer(fx.Tracer):
@@ -57,19 +33,36 @@ class BatchModule(AbstractBatchModule):
         self._module = self._create_batch_module(model, inplace)
         self.load_state_dicts(model.state_dict())
 
+    def to_batch_func(self, node: fx.Node, batch: int) -> Callable:
+        return to_batch_func(node, batch)
+
+    def to_batch_module(
+        self, node: fx.Node, module: nn.Module, batch: int
+    ) -> Union[nn.Module, AbstractBatchModule]:
+        if isinstance(module, PARAMETER_FREE_ELEMENTWISE_MODULES):
+            return module
+        if not isinstance(module, BATCH_DEPENDENT_MODULES):
+            if all(not p.requires_grad for p in module.parameters()):
+                # Skip non-learnable batch-independent modules
+                return module
+        try:
+            batch_func = BATCH_MODULES[type(module)]
+        except KeyError as e:
+            raise NotImplementedError(
+                f'Batch module for {type(module)} is not registered.') from e
+        return batch_func.from_module(module, batch)
+
     def _match_replace(
         self, node: fx.Node, modules: Dict[str, fx.GraphModule],
         shared_buffers: List[str]
     ) -> None:
         if len(node.args) == 0:
             return
-        if not isinstance(node, fx.Node):
-            return
         if node.op == 'call_function':
             if node.target in ELEMENTWISE_FUNCS:
                 return
             try:
-                setattr(node, 'target', to_batch_func(node, self.batch))
+                setattr(node, 'target', self.to_batch_func(node, self.batch))
             except NotImplementedError:
                 print(
                     f'Node: {node.format_node()}: '
@@ -81,7 +74,7 @@ class BatchModule(AbstractBatchModule):
             return
         module = modules[node.target]
         try:
-            batch_module = to_batch_module(module, self.batch)
+            batch_module = self.to_batch_module(node, module, self.batch)
         except KeyError:
             return
         *parent, name = node.target.rsplit('.', 1)
@@ -104,15 +97,15 @@ class BatchModule(AbstractBatchModule):
         module = fx.GraphModule(fx_model, graph)
         return module
 
-    def load_state_dict(
+    def load_state_dict(  # type: ignore
         self, state_dict: StateDict, strict: bool = True
     ) -> None:
         self._module.load_state_dict(OrderedDict(state_dict), strict=strict)
 
-    def state_dict(self) -> StateDict:
+    def state_dict(self) -> StateDict:  # type: ignore
         return self._module.state_dict()
 
-    def named_parameters(
+    def named_parameters(  # type: ignore
         self, prefix: str = '', recurse: bool = True
     ) -> Iterator[Tuple[str, nn.Parameter]]:
         return self._module.named_parameters(prefix=prefix, recurse=recurse)
@@ -136,42 +129,3 @@ class BatchModule(AbstractBatchModule):
 
     def extra_repr(self) -> str:
         return f'{super().extra_repr()}, '
-
-
-def assert_all_close(
-    a: Tensor, b: Tensor, rtol: float = 1e-6, atol: float = 1e-6
-) -> None:
-    assert a.size() == b.size(), f'Size mismatch, "{a.size()} != "{b.size()}".'
-    msg = f'Values mismatch, {(a - b).abs().max()=}.'
-    assert torch.allclose(a, b, rtol=rtol, atol=atol, equal_nan=True), msg
-
-
-def test_batch_module(
-    module: nn.Module, input_shapes: Sequence[Size], batch: int = 3,
-    rtol: float = 1e-6, atol: float = 1e-6
-) -> None:
-    state = module.state_dict()
-    states = []
-    for _ in range(batch):
-        rand_state = {}
-        for k, v in state.items():
-            rand_state[k] = torch.rand_like(v)
-        states.append(rand_state)
-    batch_module = BATCH_MODULES[type(module)].from_module(module, batch)
-    batch_module.load_state_dicts(states)
-    batch_inputs = [
-        torch.randn((batch, ) + tuple(shape))
-        for shape in input_shapes]
-    batch_outputs = batch_module(*[merge_batch(i) for i in batch_inputs])
-    nary = isinstance(batch_outputs, Tensor)
-    if nary:
-        batch_outputs = split_batch(batch_outputs, batch)
-    else:
-        batch_outputs = [split_batch(b, batch) for b in batch_outputs]
-    outputs = []
-    for i, inputs in enumerate(zip(*batch_inputs)):
-        module.load_state_dict(states[i])
-        if nary:
-            outputs.append(module(*inputs))
-    for a, b in zip(outputs, batch_outputs):
-        assert_all_close(a, b, rtol, atol)

@@ -1,11 +1,10 @@
-from typing import Callable, Any, Literal, Sequence, Tuple
-import functools
+from typing import Callable, Any, Literal, Sequence, Optional
 
 import torch
-from torch import fx, nn, Tensor
+from torch import nn, Tensor
 import einops
 
-from .types import DataOrder, ELEMENTWISE_FUNCS, BATCH_INDEPENDENT_FUNCS
+from .types import DataOrder
 
 
 def inner_batch_size(x: Tensor, batch: int) -> int:
@@ -26,53 +25,12 @@ def split_batch(
     return einops.rearrange(x, f'(b g) ... -> {data_order} ...', g=batch)
 
 
-def _recursive_apply(
-    func: Callable[..., Tensor], *args: Any, **kwargs: Any
-) -> Tuple[Tuple[Any, ...], dict]:
-    largs = list(args)
-    for i, arg in enumerate(args):
-        if isinstance(arg, Tensor):
-            largs[i] = func(arg)
-        elif isinstance(arg, (list, tuple)):
-            largs[i] = _recursive_apply(func, *arg)
-    for k, v in kwargs.items():
-        kwargs[k] = _recursive_apply(func, v)
-    return tuple(largs), kwargs
-
-
-def to_batch_func(
-    node: fx.Node, batch: int, data_order: DataOrder = 'g b'
-) -> Callable:
-    func = node.target
-    if func in ELEMENTWISE_FUNCS:
-        return func
-    if func in BATCH_INDEPENDENT_FUNCS:
-        def bif(*args, **kwargs):
-            args, kwargs = _recursive_apply(
-                lambda x: merge_batch(x, data_order), *args, **kwargs)
-            args = func(*args, **kwargs)
-            if not isinstance(args, tuple):
-                args = (args, )
-            args, _ = _recursive_apply(
-                lambda x: split_batch(x, batch, data_order), *args)
-            if isinstance(args, tuple) and len(args) == 1:
-                return args[0]
-            return args
-        bif = functools.wraps(func)(bif)
-        bif.__name__ = f'batch_{func.__name__}'
-        bif.__qualname__ = f'batch_{func.__qualname__}'
-        return bif
-    raise NotImplementedError(f'Function {func} not supported.')
-
-
-Reduction = Literal['none', 'mean', 'sum']
-
-
 def batch_loss(
-    batch_inputs: Tensor, batch_targets: Tensor, batch: int,
+    batch_inputs: Tensor, batch_targets: Tensor, batch: Optional[int] = None,
     loss_func: Callable[..., Tensor] = nn.functional.cross_entropy,
-    reduction: Reduction = 'mean', **kwargs: Any
+    reduction: Literal['none', 'mean', 'sum'] = 'mean', **kwargs: Any
 ) -> Tensor:
+    batch = batch or batch_inputs.shape[0]
     batch_inputs = merge_batch(batch_inputs)
     batch_targets = merge_batch(batch_targets)
     loss = loss_func(

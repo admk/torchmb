@@ -7,6 +7,7 @@ from torch import nn
 from .base import AbstractBatchModule
 from .types import IntOrInts
 from .functional import inner_batch_size
+from .utils import register_batch_module
 
 
 def _to_int_tuple(value: IntOrInts, repeat: int = 2) -> Tuple[int, ...]:
@@ -15,12 +16,19 @@ def _to_int_tuple(value: IntOrInts, repeat: int = 2) -> Tuple[int, ...]:
     return value
 
 
+@register_batch_module
 class BatchLinear(AbstractBatchModule):
     base_class = nn.Linear
 
+    @classmethod
+    def from_module(cls, module, batch):
+        return cls(
+            module.in_features, module.out_features,
+            module.bias is not None, batch)
+
     def __init__(
         self, in_features: int, out_features: int,
-        bias: bool = True, batch: int = 1
+        bias: bool = True, batch: int = 1,
     ) -> None:
         super().__init__(batch)
         self.in_features = in_features
@@ -31,12 +39,6 @@ class BatchLinear(AbstractBatchModule):
         if bias is not None:
             self.bias = nn.Parameter(torch.Tensor(batch, out_features))
 
-    @classmethod
-    def from_module(cls, module, batch):
-        return cls(
-            module.in_features, module.out_features,
-            module.bias is not None, batch)
-
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         b = inner_batch_size(x, self.batch)
         weight = einops.repeat(self.weight, 'g o i -> (b g) o i', b=b)
@@ -45,11 +47,14 @@ class BatchLinear(AbstractBatchModule):
         return x
 
 
+@register_batch_module
 class BatchConv2d(AbstractBatchModule):
     base_class = nn.Conv2d
 
     @classmethod
-    def from_module(cls, module: nn.Conv2d, batch: int) -> 'BatchConv2d':
+    def from_module(  # type: ignore
+        cls, module: nn.Conv2d, batch: int
+    ) -> 'BatchConv2d':
         if isinstance(module.padding, str):
             raise NotImplementedError(
                 'Padding mode as string is not yet supported.')
@@ -101,11 +106,12 @@ class BatchConv2d(AbstractBatchModule):
         return x
 
 
+@register_batch_module
 class BatchBatchNorm2d(AbstractBatchModule):
     base_class = nn.BatchNorm2d
 
     @classmethod
-    def from_module(
+    def from_module(  # type: ignore
         cls, module: nn.BatchNorm2d, batch: int
     ) -> 'BatchBatchNorm2d':
         return cls(
@@ -156,11 +162,12 @@ class BatchBatchNorm2d(AbstractBatchModule):
         return x
 
 
+@register_batch_module
 class BatchGroupNorm(AbstractBatchModule):
     base_class = nn.GroupNorm
 
     @classmethod
-    def from_module(
+    def from_module(  # type: ignore
         cls, module: nn.GroupNorm, batch: int
     ) -> 'BatchGroupNorm':
         return cls(

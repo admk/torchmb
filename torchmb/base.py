@@ -33,7 +33,7 @@ class AbstractBatchModule(nn.Module):
 
     def load_state_dicts(
         self, state_dict_or_dicts: Union[Sequence[StateDict], StateDict],
-        strict: bool = True
+        batch_strict: bool = True, strict: bool = True
     ) -> None:
         state_dict: StateDict = OrderedDict()
         if isinstance(state_dict_or_dicts, Mapping):
@@ -42,10 +42,21 @@ class AbstractBatchModule(nn.Module):
                     v = einops.repeat(v, '... -> g ...', g=self.batch)
                 state_dict[k] = v
         else:
+            pad_len = self.batch - len(state_dict_or_dicts)
+            if pad_len < 0 or (batch_strict and pad_len > 0):
+                raise ValueError(
+                    'Model batch mismatch '
+                    f'({self.batch=} != {len(state_dict_or_dicts)=}).')
             for k in state_dict_or_dicts[0]:
                 values = [d[k] for d in state_dict_or_dicts]
                 if k not in self.shared_buffers:
                     values = torch.stack(values)
+                    if pad_len > 0:
+                        pad_shape = (pad_len,) + values.shape[1:]
+                        pad_zeros = torch.zeros(
+                            pad_shape,
+                            device=values.device, dtype=values.dtype)
+                        values = torch.cat([values, pad_zeros], dim=0)
                 else:
                     if strict:
                         if any((v != values[0]).any() for v in values[1:]):

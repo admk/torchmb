@@ -2,8 +2,9 @@ import torch
 from torch import nn
 
 from torchmb.base import AbstractBatchModule
-from torchmb.batch import register_batch_module, BatchModule
-from torchmb.batch import test_batch_module as _test_batch_module
+from torchmb.batch import BatchModule
+from torchmb.utils import register_batch_module
+from torchmb.tests import test_model_batching as _test_model_batching
 
 from tests.base import TestBase
 
@@ -59,6 +60,14 @@ class TestBatch(TestBase):
         self.assertAllClose(u, x + y)
         self.assertAllClose(v, x - y)
 
-    def test_test_batch_module(self):
-        module = nn.Conv2d(3, 32, 3)
-        _test_batch_module(module, (self.input_shape, ), self.batch, atol=1e-5)
+    def test_test_model_batching(self):
+        class Model(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.conv = nn.Conv2d(3, 32, 3)
+
+            def forward(self, x):
+                return self.conv(x)
+
+        _test_model_batching(
+            Model(), (self.input_shape, ), self.batch, atol=1e-5)

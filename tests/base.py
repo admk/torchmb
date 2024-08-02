@@ -14,4 +14,4 @@ class TestBase(unittest.TestCase):
 
     def grad(self, t: Tensor) -> Tensor:
         self.assertIsNotNone(t.grad)
-        return t.grad
+        return t.grad  # type: ignore

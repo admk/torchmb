@@ -51,3 +51,6 @@ PARAMETER_FREE_ELEMENTWISE_MODULES: Tuple[Type[nn.Module], ...] = (
     nn.AdaptiveMaxPool1d, nn.AdaptiveMaxPool2d, nn.AdaptiveMaxPool3d,
     nn.AdaptiveAvgPool1d, nn.AdaptiveAvgPool2d, nn.AdaptiveAvgPool3d,
 )
+BATCH_DEPENDENT_MODULES: Tuple[Type[nn.Module], ...] = (
+    nn.BatchNorm1d, nn.BatchNorm2d, nn.BatchNorm3d,
+)

@@ -7,9 +7,9 @@ import torch
 from torch import nn, Tensor
 
 from torchmb.batch import (
-    AbstractBatchModule, BatchModule,
-    BatchLinear, BatchConv2d, BatchBatchNorm2d, BatchGroupNorm,
-    merge_batch, split_batch)
+    AbstractBatchModule, BatchModule, merge_batch, split_batch)
+from torchmb.layers import (
+    BatchLinear, BatchConv2d, BatchBatchNorm2d, BatchGroupNorm)
 
 from .base import TestBase
 
@@ -52,7 +52,6 @@ class TestLayerBase(TestBase):
             for k in keys:
                 msg = f'Key {k!r} mismatch, {(a[k] - b[k]).abs().max()=}.'
                 self.assertAllClose(a[k], b[k], msg)
-
 
     def test_state_dict(self) -> None:
         if not self.modules:
@@ -111,7 +110,7 @@ class TestLayerBase(TestBase):
             f'Backprop to the input of the {m}-th module failed.')
         zero_idx = np.array([i != m for i in range(self.model_batch)])
         self.assertEqual(
-            self.grad(xs)[zero_idx].abs().max(), 0,
+            self.grad(xs)[zero_idx].abs().max(), 0,  # type: ignore
             f'Input gradient leaked to modules other than the {m}-th.')
         # parameter gradients
         parameters = [dict(m.named_parameters()) for m in self.modules]
@@ -123,7 +122,7 @@ class TestLayerBase(TestBase):
                 gs, gb,
                 f'Gradient does not match for parameter {k!r} '
                 f'on the {m}-th module, {(gs - gb).abs().max()=}.')
-            gb = self.grad(pb)[zero_idx]
+            gb = self.grad(pb)[zero_idx]  # type: ignore
             self.assertEqual(
                 gb.abs().max(), 0.0,
                 f'Parameter gradient leaked to modules other than the {m}-th, '
