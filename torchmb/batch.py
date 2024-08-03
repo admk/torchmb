@@ -1,7 +1,6 @@
 import copy
 from typing import (
-    Callable, Union, Dict, OrderedDict,
-    Iterator, Tuple, List)
+    Optional, Callable, Union, Dict, OrderedDict, Iterator, Tuple, List)
 
 from torch import nn, fx, Tensor
 
@@ -15,6 +14,8 @@ from .utils import to_batch_func, BATCH_MODULES
 
 
 class BatcherTracer(fx.Tracer):
+    leaf_types = tuple(BATCH_MODULES) + BATCH_DEPENDENT_MODULES
+
     def symbolic_trace(self, module: nn.Module) -> fx.GraphModule:
         graph = super().trace(module)
         return fx.GraphModule(module, graph, module.__class__.__name__)
@@ -22,14 +23,18 @@ class BatcherTracer(fx.Tracer):
     def is_leaf_module(
         self, m: nn.Module, module_qualified_name: str
     ) -> bool:
-        if any(isinstance(m, module_cls) for module_cls in BATCH_MODULES):
+        if any(isinstance(m, module_cls) for module_cls in self.leaf_types):
             return True
         return super().is_leaf_module(m, module_qualified_name)
 
 
 class BatchModule(AbstractBatchModule):
-    def __init__(self, model: nn.Module, batch: int = 1, inplace: bool = True):
+    def __init__(
+        self, model: nn.Module, batch: int = 1, inplace: bool = True,
+        replace_func: Optional[Callable] = None,
+    ):
         super().__init__(batch)
+        self._replace_func = replace_func
         self._module = self._create_batch_module(model, inplace)
         self.load_state_dicts(model.state_dict())
 
@@ -85,7 +90,7 @@ class BatchModule(AbstractBatchModule):
                 shared_buffers.append(f'{node.target}.{n}')
 
     def _create_batch_module(
-        self, model: nn.Module, inplace: bool = True
+        self, model: nn.Module, inplace: bool = True,
     ) -> nn.Module:
         if not inplace:
             model = copy.deepcopy(model)
